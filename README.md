@@ -87,6 +87,8 @@ TELECO-ETL-PIPELINE/
 ├── Dockerfile                     # Astro Runtime Image
 ├── packages.txt                   # OS dependencies
 └── requirements.txt               # Python libs (Pandas, Postgres, etc.)
+```
+
 📸 Monitoring & Alerting System
 The pipeline includes a robust notification system built with EmailOperator and Python smtplib:
 
