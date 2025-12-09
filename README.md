@@ -89,7 +89,8 @@ TELECO-ETL-PIPELINE/
 └── requirements.txt               # Python libs (Pandas, Postgres, etc.)
 ```
 ---
-##🔔 Monitoring & Alerts
+
+## 🔔 Monitoring & Alerts
 **⚠️ On Failure**
 
 * **Instant email alert including:**
@@ -111,16 +112,16 @@ TELECO-ETL-PIPELINE/
 
 ---
 
-##🚀 How to Run
+## 🚀 How to Run
 
-###1️⃣ Clone & Start
+### 1️⃣ Clone & Start
 git clone https://github.com/YourUsername/Telecom-ETL-Pipeline.git
 cd Telecom-ETL-Pipeline
 astro dev start
 
 ---
 
-###2️⃣ Access Airflow
+### 2️⃣ Access Airflow
 
 Open your browser at:
 
@@ -134,7 +135,7 @@ Password: admin
 
 ---
 
-###3️⃣ Trigger the Pipeline
+### 3️⃣ Trigger the Pipeline
 
 Place your source CSV file into:
 
@@ -145,11 +146,11 @@ Enable the DAG:
 
 ---
 
-###➡️ Data_Warehouse_Full_Pipeline
+### ➡️ Data_Warehouse_Full_Pipeline
 
 Then simply sit back and watch the magic happen ✨
 
-##👨‍💻 Author
+## 👨‍💻 Author
 
 **Ahmed Anwer Fath**
 Data Engineer
