@@ -36,6 +36,11 @@ I implemented a dedicated **Event-Driven DAG** (`churn_99_reprocessing`) to hand
 * **Dockerized Environment:** Ensures consistency across Development, Staging, and Production.
 * **Modular SQL:** Transformation logic is decoupled from Python code, stored in organized `SQL/` directories for maintainability.
 
+📌 Architecture Diagram (Uploaded Image)
+<p align="center">
+  <img src="./assets/diagram.png" width="90%">
+</p>
+
 ---
 
 ## ⚙️ Architecture & Data Flow
