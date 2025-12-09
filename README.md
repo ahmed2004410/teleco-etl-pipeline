@@ -1,45 +1,124 @@
-Overview
-========
+# 🚀 Enterprise Telecom Churn Data Warehouse Pipeline
+**Built with Astro CLI | Apache Airflow | Docker | Medallion Architecture**
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+![Astro](https://img.shields.io/badge/Astro-CLI-purple?style=flat&logo=astronomer)
+![Airflow](https://img.shields.io/badge/Apache%20Airflow-2.9-blue?style=flat&logo=apache-airflow)
+![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?style=flat&logo=docker)
+![Postgres](https://img.shields.io/badge/Postgres-Data%20Warehouse-336791?style=flat&logo=postgresql)
+![Status](https://img.shields.io/badge/Pipeline-Production%20Ready-green)
 
-Project Contents
-================
+---
 
-Your Astro project contains the following files and folders:
+## 📖 Executive Summary
 
-- dags: This folder contains the Python files for your Airflow DAGs. By default, this directory includes one example DAG:
-    - `example_astronauts`: This DAG shows a simple ETL pipeline example that queries the list of astronauts currently in space from the Open Notify API and prints a statement for each astronaut. The DAG uses the TaskFlow API to define tasks in Python, and dynamic task mapping to dynamically print a statement for each astronaut. For more on how this DAG works, see our [Getting started tutorial](https://www.astronomer.io/docs/learn/get-started-with-airflow).
-- Dockerfile: This file contains a versioned Astro Runtime Docker image that provides a differentiated Airflow experience. If you want to execute other commands or overrides at runtime, specify them here.
-- include: This folder contains any additional files that you want to include as part of your project. It is empty by default.
-- packages.txt: Install OS-level packages needed for your project by adding them to this file. It is empty by default.
-- requirements.txt: Install Python packages needed for your project by adding them to this file. It is empty by default.
-- plugins: Add custom or community plugins for your project to this file. It is empty by default.
-- airflow_settings.yaml: Use this local-only file to specify Airflow Connections, Variables, and Pools instead of entering them in the Airflow UI as you develop DAGs in this project.
+This project is a production-grade **Data Engineering Solution** designed to process high-volume Telecom customer data. Unlike standard ETL pipelines, this system features a **Self-Healing Architecture** with automated Data Quality enforcement.
 
-Deploy Your Project Locally
-===========================
+The pipeline is fully containerized using **Docker** and orchestrated via **Astro CLI (Airflow)**, implementing the **Medallion Architecture** (Bronze, Silver, Gold) to transform raw logs into analytical insights (Star Schema).
 
-Start Airflow on your local machine by running 'astro dev start'.
+---
 
-This command will spin up five Docker containers on your machine, each for a different Airflow component:
+## 🌟 Key Features & Advanced Capabilities
 
-- Postgres: Airflow's Metadata Database
-- Scheduler: The Airflow component responsible for monitoring and triggering tasks
-- DAG Processor: The Airflow component responsible for parsing DAGs
-- API Server: The Airflow component responsible for serving the Airflow UI and API
-- Triggerer: The Airflow component responsible for triggering deferred tasks
+### 1. 🛡️ Automated Data Quality & Quarantine (The Circuit Breaker)
+The pipeline does not just "fail" on bad data; it manages it intelligently:
+* **Threshold-Based Validation:** If error rates exceed a defined threshold (e.g., 50 rows), the pipeline halts to prevent warehouse pollution.
+* **Quarantine Logic:** Rows with specific issues (Negative Tenure, Invalid Gender, etc.) are **automatically isolated** from the clean batch.
+* **Reporting:** The system generates an Excel report of rejected rows and emails it to the data steward immediately.
 
-When all five containers are ready the command will open the browser to the Airflow UI at http://localhost:8080/. You should also be able to access your Postgres Database at 'localhost:5432/postgres' with username 'postgres' and password 'postgres'.
+### 2. 🔄 "LoopBack" Reprocessing Mechanism (Correction Pipeline)
+I implemented a dedicated **Event-Driven DAG** (`churn_99_reprocessing`) to handle fixed data:
+* **Smart Sensors:** Continuously watches for corrected files in the `fixed_data/` directory.
+* **Idempotency:** Uses `Upsert` logic (Delete + Insert) to ensure no duplicate records when re-processing data.
+* **Auto-Recovery:** Once data is fixed, it automatically promotes it to Silver and refreshes the Gold layer.
 
-Note: If you already have either of the above ports allocated, you can either [stop your existing Docker containers or change the port](https://www.astronomer.io/docs/astro/cli/troubleshoot-locally#ports-are-not-available-for-my-local-airflow-webserver).
+### 3. 🏗️ Modern Infrastructure
+* **Astro Framework:** Leveraging the modern way to run Airflow for better developer experience and deployment.
+* **Dockerized Environment:** Ensures consistency across Development, Staging, and Production.
+* **Modular SQL:** Transformation logic is decoupled from Python code, stored in organized `SQL/` directories for maintainability.
 
-Deploy Your Project to Astronomer
-=================================
+---
 
-If you have an Astronomer account, pushing code to a Deployment on Astronomer is simple. For deploying instructions, refer to Astronomer documentation: https://www.astronomer.io/docs/astro/deploy-code/
+## ⚙️ Architecture & Data Flow
 
-Contact
-=======
+The project follows the **Medallion Architecture**:
 
-The Astronomer CLI is maintained with love by the Astronomer team. To report a bug or suggest a change, reach out to our support.
+| Layer | Component | Function | Technology |
+| :--- | :--- | :--- | :--- |
+| **Ingestion** | `load_csv_to_staging` | Detects new CSVs, creates Staging tables, archives raw files. | Python / Pandas |
+| **🥉 Bronze** | `fill_bronze` | Raw data ingestion with initial tracking columns. | SQL / Postgres |
+| **🥈 Silver** | `clean_silver_task` | **Complex Cleaning:** Deduplication, Type Casting, Null Handling. Bad data is moved to `include/quarantine`. | Python / SQL |
+| **🥇 Gold** | `fill_gold` | Business Logic Aggregation. Creates Fact & Dimension tables (**Star Schema**). | SQL (Data Marts) |
+
+---
+
+## 🛠️ Tech Stack
+
+* **Orchestration:** Apache Airflow (via Astro CLI)
+* **Language:** Python 3.9 (Pandas, SQLAlchemy)
+* **Database:** PostgreSQL (Local Data Warehouse)
+* **Containerization:** Docker & Docker Compose
+* **Alerting:** SMTP (Gmail Relay) for failure & quality alerts.
+* **Testing:** `pytest` for DAG integrity & logic validation.
+
+---
+
+## 📂 Project Structure
+
+```text
+TELECO-ETL-PIPELINE/
+│
+├── dags/
+│   ├── DataWarehouse.py           # 🚀 Main Daily ETL Pipeline
+│   ├── Reprocessing.py            # 🔄 Event-Driven Fix Pipeline
+│   └── SQL/                       # Modular SQL Scripts
+│       ├── Bronze/                # Raw DDLs & Inserts
+│       ├── Silver/                # Cleaning Logic
+│       └── Gold/                  # Fact/Dim Creation
+│
+├── include/
+│   ├── staging/                   # Landing zone for new files
+│   ├── quarantine/                # ⚠️ Automated rejected data landing
+│   ├── fixed_data/                # 📥 Drop zone for corrected files
+│   └── archive/                   # Historical raw data
+│
+├── tests/                         # CI/CD Tests
+│   └── test_dag_integrity.py      # Ensures no cyclic dependencies
+│
+├── Dockerfile                     # Astro Runtime Image
+├── packages.txt                   # OS dependencies
+└── requirements.txt               # Python libs (Pandas, Postgres, etc.)
+📸 Monitoring & Alerting System
+The pipeline includes a robust notification system built with EmailOperator and Python smtplib:
+
+On Task Failure: Immediate email alert with Task ID, DAG ID, and Error Log.
+
+On Data Quality Rejection:
+
+Generates an Excel file with specific reasons (e.g., "Missing ID", "Negative Charges").
+
+Attaches this file to the email sent to the Operations Team.
+
+🚀 How to Run
+Clone & Start:
+
+Bash
+
+git clone [https://github.com/YourUsername/Telecom-ETL-Pipeline.git](https://github.com/YourUsername/Telecom-ETL-Pipeline.git)
+cd Telecom-ETL-Pipeline
+astro dev start
+Access Airflow UI:
+
+Navigate to localhost:8080.
+
+Login: admin / admin.
+
+Trigger the Pipeline:
+
+Place a churn_data.csv file in include/staging/.
+
+Enable the Data_Warehouse_Full_Pipeline DAG.
+
+Watch the magic happen! 🪄
+
+👨‍💻 Author
+Ahmed Anwer Fath Data Engineer | Digital Egypt Pioneers Initiative (DEPI)
