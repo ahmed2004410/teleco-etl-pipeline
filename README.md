@@ -89,38 +89,52 @@ TELECO-ETL-PIPELINE/
 └── requirements.txt               # Python libs (Pandas, Postgres, etc.)
 ```
 
-📸 Monitoring & Alerting System
-The pipeline includes a robust notification system built with EmailOperator and Python smtplib:
+🔔 Monitoring & Alerts
+On Failure
 
-On Task Failure: Immediate email alert with Task ID, DAG ID, and Error Log.
+Instant email alert with:
 
-On Data Quality Rejection:
+DAG ID
 
-Generates an Excel file with specific reasons (e.g., "Missing ID", "Negative Charges").
+Task ID
 
-Attaches this file to the email sent to the Operations Team.
+Error log
+
+On Data-Quality Rejection
+
+Auto-generated Excel Report
+
+Sent to the Operations Team
+
+Includes reason for every rejected record
 
 🚀 How to Run
-Clone & Start:
-
-Bash
-
-git clone [https://github.com/YourUsername/Telecom-ETL-Pipeline.git](https://github.com/YourUsername/Telecom-ETL-Pipeline.git)
+1️⃣ Clone & Start
+git clone https://github.com/YourUsername/Telecom-ETL-Pipeline.git
 cd Telecom-ETL-Pipeline
 astro dev start
-Access Airflow UI:
 
-Navigate to localhost:8080.
+2️⃣ Access Airflow
 
-Login: admin / admin.
+Open browser at:
 
-Trigger the Pipeline:
+http://localhost:8080
 
-Place a churn_data.csv file in include/staging/.
+
+Login: admin / admin
+
+3️⃣ Trigger Pipeline
+
+Drop your file into:
+
+include/staging/
+
 
 Enable the Data_Warehouse_Full_Pipeline DAG.
 
-Watch the magic happen! 🪄
+Watch the magic happen! ✨
 
 👨‍💻 Author
-Ahmed Anwer Fath Data Engineer | Digital Egypt Pioneers Initiative (DEPI)
+
+Ahmed Anwer Fath
+Data Engineer
