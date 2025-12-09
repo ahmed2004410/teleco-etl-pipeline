@@ -90,23 +90,24 @@ TELECO-ETL-PIPELINE/
 ```
 
 🔔 Monitoring & Alerts
-On Failure
+⚠️ On Failure
 
-Instant email alert with:
+Instant email alert including:
 
 DAG ID
 
 Task ID
 
-Error log
+Error Log (Stack Trace)
 
-On Data-Quality Rejection
+🚫 On Data-Quality Rejection
 
 Auto-generated Excel Report
 
-Sent to the Operations Team
+Automatically emailed to the Operations Team
 
-Includes reason for every rejected record
+Includes detailed reason for every rejected record
+(e.g., Missing ID, Negative Tenure, Invalid Gender)
 
 🚀 How to Run
 1️⃣ Clone & Start
@@ -116,23 +117,28 @@ astro dev start
 
 2️⃣ Access Airflow
 
-Open browser at:
+Open your browser at:
 
-http://localhost:8080
+👉 http://localhost:8080
 
+Login credentials:
 
-Login: admin / admin
+Username: admin
 
-3️⃣ Trigger Pipeline
+Password: admin
 
-Drop your file into:
+3️⃣ Trigger the Pipeline
+
+Place your source CSV file into:
 
 include/staging/
 
 
-Enable the Data_Warehouse_Full_Pipeline DAG.
+Enable the DAG:
 
-Watch the magic happen! ✨
+➡️ Data_Warehouse_Full_Pipeline
+
+Then simply sit back and watch the magic happen ✨
 
 👨‍💻 Author
 
