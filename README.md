@@ -37,8 +37,7 @@ I implemented a dedicated **Event-Driven DAG** (`churn_99_reprocessing`) to hand
 * **Modular SQL:** Transformation logic is decoupled from Python code, stored in organized `SQL/` directories for maintainability.
 
 📌 Architecture Diagram (Uploaded Image)
-
-/assets/pipeline_architecture.png
+![Uploading Gemini_Generated_Image_6c77tz6c77tz6c77.png…]()
 
 ---
 
