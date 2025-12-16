@@ -75,7 +75,11 @@ FROM silver.churn_raw;
 -- ===================================================
 -- 6. Load FactCustomerChurn (Final Fix)
 -- ===================================================
-DELETE FROM gold.fact_customer_churn 
+-- ===================================================
+-- 6. Load FactCustomerChurn (Smart Upsert - Postgres Style)
+-- ===================================================
+
+DELETE FROM gold.fact_customer_churn
 WHERE run_date = '{{ ds }}';
 
 INSERT INTO gold.fact_customer_churn (

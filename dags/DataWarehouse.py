@@ -259,13 +259,15 @@ def load_csv_to_staging(**kwargs):
     
     if not files:
         print(" No new files found in staging.")
-        return
+        return [] # نرجع قائمة فاضية لو مفيش ملفات
 
     hook = PostgresHook(postgres_conn_id=kwargs['conn_id'])
     engine = hook.get_sqlalchemy_engine()
 
+    processed_files = [] # قائمة لحفظ أسماء الملفات اللي خلصناها
+
     for file_path in files:
-        file_name = os.path.basename(file_path) # <--- المتغير الصحيح هنا
+        file_name = os.path.basename(file_path)
         print(f" Processing file: {file_name}...")
 
         #----Read CSV into DataFrame ----#
@@ -330,18 +332,47 @@ def load_csv_to_staging(**kwargs):
         # ---------------------------------------------------------
         #-----------Load good rows to DB and archive --------------
         # ---------------------------------------------------------
+        good_rows = df  # (بعد تنظيف الأخطاء طبعاً)
         if not good_rows.empty:
             print(f" Loading {len(good_rows)} clean rows to DB...")
             good_rows.to_sql('staging_churn', con=engine, if_exists='replace', index=False, schema='public')
-            
-            archive_name = f"clean_{timestamp}_{file_name}"
-            archive_path = os.path.join(ARCHIVE_PATH, archive_name)
-            good_rows.to_csv(archive_path, index=False)
-            print(f" Clean data archived to: {archive_path}")
+        
+        # --- التغيير الجوهري هنا ---
+        # بدلاً من os.remove، سنضيف الملف للقائمة
+        processed_files.append(file_path)
+        print(f" File processed (but kept in staging): {file_name}")
 
-        #-- Remove original file from staging ---#
-        os.remove(file_path)
-        print(" Original staging file removed.")
+    # في نهاية الدالة، نرجع القائمة للـ XCom
+    return processed_files
+
+# ===============================================================
+# --------- This function archives processed files --------------
+# ===============================================================
+# ضيف الدالة دي مع باقي الدوال في ملفك
+def archive_processed_files(**context):
+    # 1. استلام مسار الملفات من التاسك الأولى (load_csv_task)
+    ti = context['ti']
+    file_paths = ti.xcom_pull(task_ids='load_csv_to_staging_task')
+    
+    if not file_paths:
+        print("No files to archive.")
+        return
+
+    # 2. نقل الملفات للأرشيف
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            file_name = os.path.basename(file_path)
+            
+            # إضافة Timestamp للاسم عشان لو الملف اتكرر
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_name = f"processed_{timestamp}_{file_name}"
+            archive_full_path = os.path.join(ARCHIVE_PATH, archive_name)
+            
+            # نقل الملف (Move)
+            shutil.move(file_path, archive_full_path)
+            print(f"✅ File successfully moved to archive: {archive_full_path}")
+        else:
+            print(f"⚠️ File not found (maybe moved already?): {file_path}")
 
 
 #====================================================================================================================#
@@ -448,11 +479,16 @@ with DAG(
     """,
     pass_value=0,
     tolerance=0
-)
+    )
 
+    archive_task = PythonOperator(
+        task_id='archive_files_task',
+        python_callable=archive_processed_files,
+        trigger_rule='all_success' 
+    )
 
-    # ترتيب التشغيل
-debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check
+    #  ترتيب التشغيل 
+    debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check >> archive_task
 
 
 
