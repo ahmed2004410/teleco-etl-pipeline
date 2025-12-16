@@ -1,7 +1,7 @@
-CREATE OR REPLACE PROCEDURE silver_load_data()
-LANGUAGE plpgsql
-AS $$
-BEGIN
+--CREATE OR REPLACE PROCEDURE silver_load_data()
+--LANGUAGE plpgsql
+--AS $$
+--BEGIN
     -- 1. مسح البيانات القديمة لضمان عدم التكرار
     TRUNCATE TABLE silver.churn_raw;
 
@@ -77,4 +77,4 @@ BEGIN
         COALESCE(churn_reason, 'n/a')
     FROM bronze.churn_raw;
 END;
-$$;
+--$$;

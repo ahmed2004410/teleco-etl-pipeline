@@ -356,7 +356,9 @@ with DAG(
     fill_silver = SQLExecuteQueryOperator(
         task_id="insert_into_silver",
         conn_id=conn_id,
-        sql='CALL silver_load_data();'
+        #sql='CALL silver_load_data();'
+        sql='Silver/insert_data_into_silver.sql'
+
     )
 
     #this task checks data quality in silver table

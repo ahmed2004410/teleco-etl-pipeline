@@ -1,6 +1,8 @@
-DROP TABLE IF EXISTS silver.churn_raw;
+CREATE SCHEMA IF NOT EXISTS silver;
 
-CREATE TABLE silver.churn_raw (
+Create TABLE IF NOT EXISTS silver.churn_raw
+
+ (
     customer_id VARCHAR(50),
     gender VARCHAR(10),
     senior_citizen VARCHAR(5),    -- تم التعديل من Senior Citizen
