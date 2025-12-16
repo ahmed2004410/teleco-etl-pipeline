@@ -75,11 +75,12 @@ FROM silver.churn_raw;
 -- ===================================================
 -- 6. Load FactCustomerChurn (Final Fix)
 -- ===================================================
-TRUNCATE TABLE gold.fact_customer_churn;
+DELETE FROM gold.fact_customer_churn 
+WHERE run_date = '{{ ds }}';
 
 INSERT INTO gold.fact_customer_churn (
     customer_key, contract_key, payment_method_key, churn_reason_key, service_key,
-    tenure_months, monthly_charges, total_charges, churn_flag, cltv, churn_score
+    tenure_months, monthly_charges, total_charges, churn_flag, cltv, churn_score,run_date
 )
 SELECT
     c.customer_key,
@@ -102,7 +103,8 @@ SELECT
     -- 2. CLTV: نفس الشيء، حولناه لنص أولاً
     CAST(NULLIF(REGEXP_REPLACE(s.cltv::TEXT, '[^0-9.]', '', 'g'), '') AS INTEGER),
     
-    s.churn_score::DECIMAL(5,2)
+    s.churn_score::DECIMAL(5,2),
+    '{{ ds }}'::DATE
 FROM silver.churn_raw s
 JOIN gold.dim_customer c ON c.customer_id = s.customer_id
 

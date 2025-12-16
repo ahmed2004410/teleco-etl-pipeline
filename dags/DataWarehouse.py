@@ -1,4 +1,5 @@
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator, SQLCheckOperator, SQLValueCheckOperator
+from airflow.providers.slack.hooks.slack_webhook import SlackWebhookHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.python import PythonOperator
 from airflow.utils.trigger_rule import TriggerRule
@@ -23,26 +24,44 @@ REPORTS_PATH = os.path.join(AIRFLOW_HOME, 'include', 'reports')
 
 for path in [STAGING_PATH, QUARANTINE_PATH, REPORTS_PATH]:
     os.makedirs(path, exist_ok=True)
+# ===============================================================
+#------ This section contains failure notification functions ----
+# ===============================================================
+def send_slack_alert(context):
+    ti = context.get('task_instance')
+    dag_id = ti.dag_id
+    task_id = ti.task_id
+    execution_date = context.get('execution_date')
+    log_url = ti.log_url
+    exception = context.get('exception')
+    error_msg = str(exception) if exception else "Unknown Error"
 
-#======== to make sure smtp connection is working ===================#
-def debug_smtp_connection():
+    slack_msg = f"""
+    :red_circle: *Task Failed!*
+    *DAG*: `{dag_id}`
+    *Task*: `{task_id}`
+    *Time*: `{execution_date}`
+    *Error*: ```{error_msg}```
+    < {log_url} | View Logs >
+    """
+
     try:
-        conn = BaseHook.get_connection("smtp_default")
-        print(f" Detective Airflow Report:")
-        print(f"   -> Host detected: {conn.host}")
-        print(f"   -> Login detected: {conn.login}")
-        print(f"   -> Port detected: {conn.port}")
+        # تأكد أن اسم الكونكشن في Airflow هو slack_conn
+        slack_hook = SlackWebhookHook(slack_webhook_conn_id='slack_conn')
+        slack_hook.send(text=slack_msg)
+        print("✅ Slack notification sent successfully!")
     except Exception as e:
-        print(f" Could not find smtp_default connection: {e}")
+        print(f"❌ Failed to send Slack notification: {e}")
 
-
-#================ send email on task failure ========================#
+# ===============================================================
+# ------------This function sends email on failure --------------
+# ===============================================================
 def notify_email_on_failure(context):
-    try:
-        task_instance = context['task_instance']
-        exception = context.get('exception') 
-        error_message = str(exception) if exception else "Unknown Error"
-        
+    task_instance = context['task_instance']
+    exception = context.get('exception') 
+    error_message = str(exception) if exception else "Unknown Error"
+    
+    try: 
         print(" Attempting to send failure email manually...")
         send_email(
             to=['b4677396@gmail.com'],
@@ -54,15 +73,46 @@ def notify_email_on_failure(context):
             <p>Time: {datetime.now()}</p>
             """
         )
-        print(" Email sent successfully.")
+        print("✅ Email sent successfully.")
     except Exception as e:
-        print(f" Failed to send email: {e}")
+        print(f"❌ Failed to send email: {e}")
+
+# ===============================================================
+# ---------- This is the master failure callback function -------
+# ===============================================================
+def failure_callback_manager(context):
+    # شغل دالة سلاك
+    send_slack_alert(context)
+    # شغل دالة الإيميل
+    notify_email_on_failure(context)
 
 default_args = {
     'owner': 'airflow',
-    'on_failure_callback': notify_email_on_failure
-    }
+    'retries': 0,
+    # نربط هنا دالة المايسترو (رقم 3) وهي ستتولى الباقي
+    'on_failure_callback': failure_callback_manager, 
+    'email_on_failure': False, 
+}
 
+# ===============================================================
+# ----------- This function debugs SMTP connection --------------
+# ===============================================================
+def debug_smtp_connection():
+    try:
+        conn = BaseHook.get_connection("smtp_default")
+        print(f" Detective Airflow Report:")
+        print(f"   -> Host detected: {conn.host}")
+        print(f"   -> Login detected: {conn.login}")
+        print(f"   -> Port detected: {conn.port}")
+    except Exception as e:
+        print(f" Could not find smtp_default connection: {e}")
+
+default_args = {
+    'owner': 'airflow',
+    'retries': 0,
+    'on_failure_callback': failure_callback_manager, 
+    'email_on_failure': False, 
+}
 #================= Modified: Isolate bad rows, export to Excel, then clean ===================#
 def clean_or_stop_silver(**kwargs):
     hook = PostgresHook(postgres_conn_id='churn_db_conn')
@@ -188,7 +238,7 @@ def clean_or_stop_silver(**kwargs):
         hook.run(delete_sql)
         print("Silver table cleaned. Bad data removed.")
 
-# #============================ this function clean the file name =======================
+#============================ this function clean the file name =======================
 def clean_filename(filename):
     base_name = os.path.splitext(filename)[0]
     prefixes_to_remove = ['quarantine', 'remaining_errors', 'clean', 'fixed', 'errors']
@@ -293,9 +343,11 @@ def load_csv_to_staging(**kwargs):
         os.remove(file_path)
         print(" Original staging file removed.")
 
+
 #====================================================================================================================#
 #===========================================             Start Ouer DAG          ====================================#
 #====================================================================================================================#
+
 with DAG(
     dag_id="Data_Warehouse_Full_Pipeline",
     description="Full Churn Pipeline (Bronze -> Silver -> Gold)",
@@ -312,7 +364,7 @@ with DAG(
     #this task debugs smtp connection
     debug_task = PythonOperator(
          task_id='debug_smtp',
-         python_callable=debug_smtp_connection
+         python_callable= debug_smtp_connection
     )
 
     #this task loads csv to staging table

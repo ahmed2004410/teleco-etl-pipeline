@@ -2,3 +2,5 @@
 pandas
 openpyxl
 apache-airflow-providers-postgres
+twilio
+apache-airflow-providers-slack

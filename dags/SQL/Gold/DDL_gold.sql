@@ -57,5 +57,6 @@ CREATE TABLE IF NOT EXISTS gold.fact_customer_churn (
     total_charges DECIMAL(12,2),
     churn_flag VARCHAR(10),
     cltv DECIMAL(12,2),
-    churn_score DECIMAL(5,2)
+    churn_score DECIMAL(5,2),
+    run_date DATE
 );
