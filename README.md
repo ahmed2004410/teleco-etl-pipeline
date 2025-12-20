@@ -120,7 +120,7 @@ TELECO-ETL-PIPELINE/
 ## 🚀 How to Run
 
 ### 1️⃣ Clone & Start
-git clone https://github.com/ahmed2004410/Telecom-ETL-Pipeline.git
+https://github.com/ahmed2004410/teleco-etl-pipeline
 cd Telecom-ETL-Pipeline
 astro dev start
 
