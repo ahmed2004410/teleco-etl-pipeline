@@ -364,8 +364,8 @@ def archive_processed_files(**context):
             file_name = os.path.basename(file_path)
             
             # إضافة Timestamp للاسم عشان لو الملف اتكرر
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive_name = f"processed_{timestamp}_{file_name}"
+            timestamp = datetime.now().strftime("%Y%m%d")
+            archive_name = f"{file_name}_date_{timestamp}.csv"
             archive_full_path = os.path.join(ARCHIVE_PATH, archive_name)
             
             # نقل الملف (Move)

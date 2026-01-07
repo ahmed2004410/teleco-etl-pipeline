@@ -7,6 +7,7 @@ Bronze Layer Loading Script (Postgres Version)
 */
 
 -- 1. تنظيف الجدول البرونزي (بدلاً من Truncate التقليدية)
+
 TRUNCATE TABLE bronze.churn_raw;
 
 -- 2. إدخال البيانات (مع معالجة lat_long في نفس الخطوة)
