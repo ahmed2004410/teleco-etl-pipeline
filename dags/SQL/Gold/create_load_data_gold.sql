@@ -140,5 +140,4 @@ LEFT JOIN gold.dim_services sv
    WHERE NOT EXISTS (
     SELECT 1 FROM gold.fact_customer_churn f
     WHERE f.customer_key::VARCHAR = c.customer_key::VARCHAR
-      AND f.run_date = '{{ ds }}'::DATE
 );
