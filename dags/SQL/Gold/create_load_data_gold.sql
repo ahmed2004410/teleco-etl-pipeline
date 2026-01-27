@@ -101,7 +101,7 @@ SELECT
     cr.churn_reason_key,
     sv.service_key,
     
-    -- 1. Tenure: حولناه لنص، نظفناه، ثم لرقم (للأمان القصوى)
+    -- 1. Tenure: حولناه لنص، نظفناه، ثم لرقم  
     CAST(NULLIF(REGEXP_REPLACE(s.tenure_in_months::TEXT, '[^0-9.]', '', 'g'), '') AS INTEGER),
     
     s.monthly_charges_amount::DECIMAL(10,2),

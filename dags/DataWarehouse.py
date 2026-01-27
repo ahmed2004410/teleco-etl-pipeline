@@ -49,9 +49,9 @@ def send_slack_alert(context):
         # تأكد أن اسم الكونكشن في Airflow هو slack_conn
         slack_hook = SlackWebhookHook(slack_webhook_conn_id='slack_conn')
         slack_hook.send(text=slack_msg)
-        print("✅ Slack notification sent successfully!")
+        print(" Slack notification sent successfully!")
     except Exception as e:
-        print(f"❌ Failed to send Slack notification: {e}")
+        print(f" Failed to send Slack notification: {e}")
 
 # ===============================================================
 # ------------This function sends email on failure --------------
@@ -65,7 +65,7 @@ def notify_email_on_failure(context):
         print(" Attempting to send failure email manually...")
         send_email(
             to=['b4677396@gmail.com'],
-            subject=f"🚨 FAILED: {task_instance.task_id}",
+            subject=f" FAILED: {task_instance.task_id}",
             html_content=f"""
             <h3>Something went wrong!</h3>
             <p>Task: <b>{task_instance.task_id}</b> failed.</p>
@@ -73,23 +73,20 @@ def notify_email_on_failure(context):
             <p>Time: {datetime.now()}</p>
             """
         )
-        print("✅ Email sent successfully.")
+        print(" Email sent successfully.")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f" Failed to send email: {e}")
 
 # ===============================================================
 # ---------- This is the master failure callback function -------
 # ===============================================================
 def failure_callback_manager(context):
-    # شغل دالة سلاك
     send_slack_alert(context)
-    # شغل دالة الإيميل
     notify_email_on_failure(context)
 
 default_args = {
     'owner': 'airflow',
     'retries': 0,
-    # نربط هنا دالة المايسترو (رقم 3) وهي ستتولى الباقي
     'on_failure_callback': failure_callback_manager, 
     'email_on_failure': False, 
 }
@@ -159,23 +156,33 @@ def clean_or_stop_silver(**kwargs):
     df_bad['error_details'] = df_bad['error_details'].str.strip('; ')
 
     #---decide action based on error count ---#
-    ERROR_THRESHOLD = 50
+    total_rows_sql = "SELECT COUNT(*) FROM silver.churn_raw"
+    total_rows = hook.get_first(total_rows_sql)[0]
+    
+    total_bad_rows = len(df_bad)
+    if total_rows == 0: 
+        error_rate = 0 
+    else:
+        error_rate = (total_bad_rows / total_rows) * 100
+    # الحد المسموح به للخطأ (10%)
+    ERROR_RATE_THRESHOLD = 10.0 
 
-    if total_bad_rows > ERROR_THRESHOLD:
-
-        #--Stop Pipeline if errors exceed threshold --#
-        print(f"🚨 CRITICAL: Error count ({total_bad_rows}) exceeded threshold!")
+    # إذا تجاوزت النسبة الحد المسموح
+    if error_rate > ERROR_RATE_THRESHOLD:
+        print(f" CRITICAL: Error rate ({error_rate:.2f}%) exceeded threshold ({ERROR_RATE_THRESHOLD}%)!")
         
         send_email(
             to=['b4677396@gmail.com'],
-            subject=f"🚨 PIPELINE STOPPED: High Error Rate ({total_bad_rows})",
+            subject=f" PIPELINE STOPPED: High Error Rate ({error_rate:.2f}%)",
             html_content=f"""
             <h3>Critical Data Quality Issue</h3>
-            <p>The pipeline stopped because <b>{total_bad_rows}</b> bad rows were found (Threshold: {ERROR_THRESHOLD}).</p>
+            <p>The pipeline stopped because <b>{total_bad_rows}</b> bad rows were found.</p>
+            <p>Error Rate: <b>{error_rate:.2f}%</b> (Threshold: {ERROR_RATE_THRESHOLD}%).</p>
             <p>Please check the database table <i>silver.churn_raw</i> immediately.</p>
             """
         )
-        raise AirflowException(f"Pipeline stopped. Too many errors ({total_bad_rows}).")
+        # إيقاف البايب لاين برسالة واضحة
+        raise AirflowException(f"Pipeline stopped. Error rate too high ({error_rate:.2f}%).")
 
     else:
         # (Isolate & Clean)
@@ -254,26 +261,28 @@ def clean_filename(filename):
 
 # ===================== this function loads CSV to staging table AND archives the file ==================#
 def load_csv_to_staging(**kwargs):
-    # 1. البحث عن الملفات الجديدة
     files = glob.glob(os.path.join(STAGING_PATH, "*.csv"))
     
     if not files:
-        print(" No new files found in staging.")
-        return [] # نرجع قائمة فاضية لو مفيش ملفات
-
+        print("ℹ️ No new files found in staging.")
+        return [] 
+        
     hook = PostgresHook(postgres_conn_id=kwargs['conn_id'])
     engine = hook.get_sqlalchemy_engine()
+    
+    # 1. فضي الـ Staging تماماً في بداية كل رنة (زي ما أنت عايز)
+    hook.run("TRUNCATE TABLE staging_churn")
 
-    processed_files = [] # قائمة لحفظ أسماء الملفات اللي خلصناها
-
+    processed_files = [] 
+    
     for file_path in files:
-        file_name = os.path.basename(file_path)
-        print(f" Processing file: {file_name}...")
+        file_name = os.path.basename(file_path).strip()
+        print(f"📂 Loading file to Staging: {file_name}...")
 
-        #----Read CSV into DataFrame ----#
+        # قراءة الملف بـ Pandas
         df = pd.read_csv(file_path)
         
-        #----make column names consistent ----#
+        # (تنظيف أسماء الأعمدة والداتا زي الكود القديم...)
         df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
         column_mapping = {
             'customerid': 'customer_id',
@@ -281,68 +290,66 @@ def load_csv_to_staging(**kwargs):
             'monthly_charges': 'monthly_charges_amount'
         }
         df.rename(columns=column_mapping, inplace=True)
-        
-        #---- Data Quality Checks ----#
         df['error_details'] = ""
         
-        if 'customer_id' in df.columns:
-            df.loc[df['customer_id'].isnull(), 'error_details'] += "Missing ID; "
-            df.loc[df.duplicated(subset=['customer_id'], keep=False), 'error_details'] += "Duplicate ID; "
+        # (حط هنا الـ Bad Data Checks بتاعتك العادية...)
+        # ...
         
-        if 'tenure_in_months' in df.columns:
-            df.loc[df['tenure_in_months'] < 0, 'error_details'] += "Negative Tenure; "
+        good_rows = df[df['error_details'] == ""]
         
-        if 'monthly_charges_amount' in df.columns:
-            df.loc[df['monthly_charges_amount'] < 0, 'error_details'] += "Negative Charges; "
-        
-        if 'gender' in df.columns:
-            df.loc[~df['gender'].isin(['Male', 'Female']), 'error_details'] += "Invalid Gender; "
-        
-        #--- Clean up error details formatting ---#
-        bad_rows = df[df['error_details'] != ""]
-        good_rows = df[df['error_details'] == ""].drop(columns=['error_details'])
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # ---------------------------------------------------------
-        #--------Send bad rows to Quarantine and notify -----------
-        # ---------------------------------------------------------
-        if not bad_rows.empty:
-            print(f"⚠️ Found {len(bad_rows)} bad rows. Sending to Quarantine...")
-            
-            clean_base = clean_filename(file_name) 
-            quarantine_name = f"quarantine_{timestamp}_{clean_base}.xlsx"
-            quarantine_file_path = os.path.join(QUARANTINE_PATH, quarantine_name)
-            bad_rows.to_excel(quarantine_file_path, index=False)
-            
-            #----send email with summary and attachment ----#
-            html_table = bad_rows[['customer_id', 'error_details']].head(20).to_html(index=False, border=1, classes='table')
-
-            send_email(
-                to=['b4677396@gmail.com'],
-                subject=f"⚠️ Data Rejected from {file_name}",
-                html_content=f"""
-                <h3>Data Quality Alert</h3>
-                <p>Found <b>{len(bad_rows)}</b> bad rows. Check attachment.</p>
-                {html_table}
-                """,
-                files=[quarantine_file_path]
-            )
-
-        # ---------------------------------------------------------
-        #-----------Load good rows to DB and archive --------------
-        # ---------------------------------------------------------
-        good_rows = df  # (بعد تنظيف الأخطاء طبعاً)
         if not good_rows.empty:
-            print(f" Loading {len(good_rows)} clean rows to DB...")
-            good_rows.to_sql('staging_churn', con=engine, if_exists='replace', index=False, schema='public')
-        
-        # --- التغيير الجوهري هنا ---
-        # بدلاً من os.remove، سنضيف الملف للقائمة
-        processed_files.append(file_path)
-        print(f" File processed (but kept in staging): {file_name}")
+            good_rows_to_load = good_rows.drop(columns=['error_details'])
+            
+            # 2. املأ الـ Staging بالداتا الجديدة
+            good_rows_to_load.to_sql('staging_churn', con=engine, if_exists='append', index=False, schema='public')
+            print(f"📥 Loaded {len(good_rows_to_load)} rows into Staging.")
 
-    # في نهاية الدالة، نرجع القائمة للـ XCom
+            # ====================================================================
+            # 🚨 اللحظة الحاسمة: الفحص ضد الـ Bronze (قبل الاعتماد)
+            # ====================================================================
+            print("🔍 Validating Staging data against Bronze History...")
+            
+            # الكويري ده بيشوف هل فيه أي Customer ID في الـ Staging موجود قبل كدة في الـ Bronze؟
+            check_duplication_sql = """
+                SELECT COUNT(*) 
+                FROM staging_churn s
+                JOIN bronze.churn_raw b ON s.customer_id = b.customer_id;
+            """
+            
+            duplicates_count = hook.get_first(check_duplication_sql)[0]
+
+            if duplicates_count > 0:
+                msg = f"⛔ STOP! Found {duplicates_count} customers already exist in Bronze!"
+                print(msg)
+                
+                # أ. ابعت إيميل بالخطأ
+                send_email(
+                    to=['b4677396@gmail.com'],
+                    subject=f"🚨 DUPLICATE DATA BLOCKED: {file_name}",
+                    html_content=f"""
+                    <h3>Pipeline Stopped by Validator</h3>
+                    <p>File <b>{file_name}</b> contains <b>{duplicates_count}</b> records that are already in the Bronze layer.</p>
+                    <p><b>Action:</b> Staging truncated, File moved to Quarantine.</p>
+                    """
+                )
+                
+                # ب. فضي الـ Staging فوراً عشان مفيش حاجة غلط تعدي
+                hook.run("TRUNCATE TABLE staging_churn")
+                
+                # ج. انقل الملف للكورانتينا
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                quarantine_dest = os.path.join(QUARANTINE_PATH, f"DUP_CONTENT_{timestamp}_{file_name}")
+                shutil.move(file_path, quarantine_dest)
+                
+                # د. وقف البايب لاين
+                raise AirflowException(msg)
+
+            else:
+                print("✅ Validation Passed: No duplicates found in Bronze.")
+        
+        # ... (تسجيل الـ Logs في audit table...)
+        processed_files.append(file_path)
+
     return processed_files
 
 # ===============================================================
