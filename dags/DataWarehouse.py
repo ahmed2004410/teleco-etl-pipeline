@@ -46,7 +46,6 @@ def send_slack_alert(context):
     """
 
     try:
-        # تأكد أن اسم الكونكشن في Airflow هو slack_conn
         slack_hook = SlackWebhookHook(slack_webhook_conn_id='slack_conn')
         slack_hook.send(text=slack_msg)
         print(" Slack notification sent successfully!")
@@ -253,7 +252,7 @@ def clean_filename(filename):
     for prefix in prefixes_to_remove:
         base_name = re.sub(f"^{prefix}_", "", base_name, flags=re.IGNORECASE)
         base_name = re.sub(f"_{prefix}", "", base_name, flags=re.IGNORECASE)
-        base_name = re.sub(r'\d{8}_\d{6}_', '', base_name) # يحذف التاريخ القديم
+        base_name = re.sub(r'\d{8}_\d{6}_', '', base_name) 
 
     base_name = base_name.strip('_')
     if not base_name: base_name = "data"
@@ -270,7 +269,6 @@ def load_csv_to_staging(**kwargs):
     hook = PostgresHook(postgres_conn_id=kwargs['conn_id'])
     engine = hook.get_sqlalchemy_engine()
     
-    # 1. فضي الـ Staging تماماً في بداية كل رنة (زي ما أنت عايز)
     hook.run("TRUNCATE TABLE staging_churn")
 
     processed_files = [] 
@@ -282,7 +280,6 @@ def load_csv_to_staging(**kwargs):
         # قراءة الملف بـ Pandas
         df = pd.read_csv(file_path)
         
-        # (تنظيف أسماء الأعمدة والداتا زي الكود القديم...)
         df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
         column_mapping = {
             'customerid': 'customer_id',
@@ -291,10 +288,7 @@ def load_csv_to_staging(**kwargs):
         }
         df.rename(columns=column_mapping, inplace=True)
         df['error_details'] = ""
-        
-        # (حط هنا الـ Bad Data Checks بتاعتك العادية...)
-        # ...
-        
+
         good_rows = df[df['error_details'] == ""]
         
         if not good_rows.empty:
@@ -304,9 +298,7 @@ def load_csv_to_staging(**kwargs):
             good_rows_to_load.to_sql('staging_churn', con=engine, if_exists='append', index=False, schema='public')
             print(f"📥 Loaded {len(good_rows_to_load)} rows into Staging.")
 
-            # ====================================================================
-            # 🚨 اللحظة الحاسمة: الفحص ضد الـ Bronze (قبل الاعتماد)
-            # ====================================================================
+
             print("🔍 Validating Staging data against Bronze History...")
             
             # الكويري ده بيشوف هل فيه أي Customer ID في الـ Staging موجود قبل كدة في الـ Bronze؟
@@ -336,12 +328,10 @@ def load_csv_to_staging(**kwargs):
                 # ب. فضي الـ Staging فوراً عشان مفيش حاجة غلط تعدي
                 hook.run("TRUNCATE TABLE staging_churn")
                 
-                # ج. انقل الملف للكورانتينا
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 quarantine_dest = os.path.join(QUARANTINE_PATH, f"DUP_CONTENT_{timestamp}_{file_name}")
                 shutil.move(file_path, quarantine_dest)
                 
-                # د. وقف البايب لاين
                 raise AirflowException(msg)
 
             else:
@@ -355,9 +345,7 @@ def load_csv_to_staging(**kwargs):
 # ===============================================================
 # --------- This function archives processed files --------------
 # ===============================================================
-# ضيف الدالة دي مع باقي الدوال في ملفك
 def archive_processed_files(**context):
-    # 1. استلام مسار الملفات من التاسك الأولى (load_csv_task)
     ti = context['ti']
     file_paths = ti.xcom_pull(task_ids='load_csv_to_staging_task')
     
