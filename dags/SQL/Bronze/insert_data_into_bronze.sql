@@ -17,7 +17,6 @@ INSERT INTO bronze.churn_raw (
     senior_citizen,
     partner,
     dependents,
-    count,
     country,
     state,
     city,
@@ -52,7 +51,6 @@ SELECT
     senior_citizen,          -- الاسم الجديد (بدلاً من "Senior Citizen")
     partner,
     dependents,
-    count,
     country,
     state,
     city,

@@ -8,7 +8,6 @@ Create TABLE IF NOT EXISTS silver.churn_raw
     senior_citizen VARCHAR(5),    -- تم التعديل من Senior Citizen
     partner VARCHAR(5),
     dependents VARCHAR(5),
-    count INTEGER,
     country VARCHAR(50),
     state VARCHAR(50),
     city VARCHAR(50),

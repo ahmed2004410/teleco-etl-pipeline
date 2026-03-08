@@ -12,7 +12,6 @@
         senior_citizen,        -- كان is_senior_citizen
         partner,               -- كان has_partner
         dependents,            -- كان has_dependents
-        count,
         country,
         state,
         city,
@@ -47,7 +46,6 @@
         senior_citizen,
         partner,
         dependents,
-        count,
         country,
         state,
         city,

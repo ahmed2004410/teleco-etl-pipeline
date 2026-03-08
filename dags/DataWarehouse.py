@@ -24,6 +24,126 @@ REPORTS_PATH = os.path.join(AIRFLOW_HOME, 'include', 'reports')
 
 for path in [STAGING_PATH, QUARANTINE_PATH, REPORTS_PATH]:
     os.makedirs(path, exist_ok=True)
+
+# ===============================================================
+# -------- Metadata Table DDL (Pipeline State Management) -------
+# ===============================================================
+METADATA_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS public.pipeline_file_metadata (
+    id                  SERIAL PRIMARY KEY,
+    file_name           VARCHAR(500)    NOT NULL UNIQUE,
+    file_path           TEXT            NOT NULL,
+    file_size_bytes     BIGINT,
+    row_count           INTEGER,
+    status              VARCHAR(50)     NOT NULL DEFAULT 'PENDING',
+    error_message       TEXT,
+    processed_at        TIMESTAMP,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    dag_run_id          VARCHAR(250),
+    checksum_md5        VARCHAR(64)
+);
+"""
+
+# ===============================================================
+# -------- Bootstrap: ensure metadata table exists on import ----
+# ===============================================================
+def _bootstrap_metadata_table():
+    """Called once at DAG parse time to guarantee the table exists."""
+    try:
+        hook = PostgresHook(postgres_conn_id='churn_db_conn')
+        hook.run(METADATA_TABLE_DDL)
+        print("✅ pipeline_file_metadata table is ready.")
+    except Exception as e:
+        print(f"⚠️  Could not bootstrap metadata table: {e}")
+
+# ===============================================================
+# ----- Incremental Load Helpers --------------------------------
+# ===============================================================
+import hashlib
+
+def _md5_of_file(path: str) -> str:
+    """Return MD5 hex-digest of a file (for change detection)."""
+    h = hashlib.md5()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def _get_new_files(hook: PostgresHook, file_list: list) -> list:
+    """
+    Compare file_list against the metadata table and return only
+    files that are truly NEW (never seen before, or previously FAILED).
+
+    A file is skipped if it has status = 'SUCCESS' AND its checksum
+    hasn't changed since the last successful run.
+    """
+    if not file_list:
+        return []
+
+    new_files = []
+    for fp in file_list:
+        fname   = os.path.basename(fp)
+        chk     = _md5_of_file(fp)
+
+        row = hook.get_first(
+            """
+            SELECT status, checksum_md5
+            FROM   public.pipeline_file_metadata
+            WHERE  file_name = %s
+            ORDER  BY created_at DESC
+            LIMIT  1
+            """,
+            parameters=(fname,)
+        )
+
+        if row is None:
+            # Never seen → process it
+            new_files.append(fp)
+            print(f"🆕  NEW file detected: {fname}")
+
+        elif row[0] == 'SUCCESS' and row[1] == chk:
+            # Already processed, file unchanged → SKIP
+            print(f"⏭️  SKIPPING (already processed, unchanged): {fname}")
+
+        else:
+            # Previously FAILED or file content changed → retry
+            new_files.append(fp)
+            print(f"🔄  RE-QUEUED (status={row[0]}, checksum changed={row[1] != chk}): {fname}")
+
+    return new_files
+
+def _register_file(hook: PostgresHook, fp: str, status: str,
+                   row_count: int = None, error_msg: str = None,
+                   dag_run_id: str = None):
+    """
+    Upsert a record in pipeline_file_metadata.
+    Uses INSERT … ON CONFLICT to handle both first-time and retry runs.
+    """
+    fname = os.path.basename(fp)
+    fsize = os.path.getsize(fp) if os.path.exists(fp) else None
+    chk   = _md5_of_file(fp)    if os.path.exists(fp) else None
+
+    hook.run(
+        """
+        INSERT INTO public.pipeline_file_metadata
+            (file_name, file_path, file_size_bytes, row_count,
+             status, error_message, processed_at, dag_run_id, checksum_md5)
+        VALUES
+            (%s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+        ON CONFLICT (file_name) DO UPDATE SET
+            status        = EXCLUDED.status,
+            error_message = EXCLUDED.error_message,
+            processed_at  = EXCLUDED.processed_at,
+            row_count     = EXCLUDED.row_count,
+            file_size_bytes = EXCLUDED.file_size_bytes,
+            dag_run_id    = EXCLUDED.dag_run_id,
+            checksum_md5  = EXCLUDED.checksum_md5;
+        """,
+        parameters=(fname, fp, fsize, row_count,
+                    status, error_msg, dag_run_id, chk)
+    )
+    print(f"📋 Metadata updated → {fname} : {status}")
+
 # ===============================================================
 #------ This section contains failure notification functions ----
 # ===============================================================
@@ -260,86 +380,140 @@ def clean_filename(filename):
 
 # ===================== this function loads CSV to staging table AND archives the file ==================#
 def load_csv_to_staging(**kwargs):
-    files = glob.glob(os.path.join(STAGING_PATH, "*.csv"))
+    """
+    Incremental / Idempotent loader.
     
-    if not files:
-        print("ℹ️ No new files found in staging.")
-        return [] 
-        
-    hook = PostgresHook(postgres_conn_id=kwargs['conn_id'])
+    Flow:
+      1. Discover all CSV files in STAGING_PATH.
+      2. Ask the metadata table which ones are truly NEW (delta).
+      3. For each new file:
+           a. Register it as PROCESSING to prevent parallel re-runs.
+           b. Validate row-level quality; quarantine bad rows.
+           c. Check for duplicates vs Bronze layer.
+           d. Load clean rows into staging_churn.
+           e. Mark the file SUCCESS (or FAILED on error).
+      4. Return only the successfully processed file paths for archiving.
+    """
+    dag_run_id = kwargs.get('run_id', 'unknown')
+    conn_id    = kwargs['conn_id']
+
+    # ── 1. Discover files ──────────────────────────────────────────
+    all_files = glob.glob(os.path.join(STAGING_PATH, "*.csv"))
+    if not all_files:
+        print("ℹ️  No CSV files found in staging folder.")
+        return []
+
+    hook   = PostgresHook(postgres_conn_id=conn_id)
     engine = hook.get_sqlalchemy_engine()
-    
+
+    # ── 2. Filter: keep only NEW / FAILED files (the delta) ───────
+    new_files = _get_new_files(hook, all_files)
+
+    if not new_files:
+        print("✅  All files already processed. Nothing to do — pipeline is up-to-date.")
+        return []
+
+    print(f"📦  {len(new_files)} new file(s) to process out of {len(all_files)} total.")
+
+    # Truncate staging once before the batch so we start clean
     hook.run("TRUNCATE TABLE staging_churn")
 
-    processed_files = [] 
-    
-    for file_path in files:
+    processed_files = []
+
+    for file_path in new_files:
         file_name = os.path.basename(file_path).strip()
-        print(f"📂 Loading file to Staging: {file_name}...")
+        print(f"\n📂  Processing: {file_name}")
 
-        # قراءة الملف بـ Pandas
-        df = pd.read_csv(file_path)
-        
-        df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
-        column_mapping = {
-            'customerid': 'customer_id',
-            'tenure_months': 'tenure_in_months',
-            'monthly_charges': 'monthly_charges_amount'
-        }
-        df.rename(columns=column_mapping, inplace=True)
-        df['error_details'] = ""
+        # ── a. Mark as IN-PROGRESS ─────────────────────────────────
+        _register_file(hook, file_path, status='PROCESSING',
+                       dag_run_id=dag_run_id)
 
-        good_rows = df[df['error_details'] == ""]
-        
-        if not good_rows.empty:
-            good_rows_to_load = good_rows.drop(columns=['error_details'])
-            
-            # 2. املأ الـ Staging بالداتا الجديدة
-            good_rows_to_load.to_sql('staging_churn', con=engine, if_exists='append', index=False, schema='public')
-            print(f"📥 Loaded {len(good_rows_to_load)} rows into Staging.")
+        try:
+            # ── b. Read & normalise columns ────────────────────────
+            df = pd.read_csv(file_path)
+            df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
+            df.rename(columns={
+                'customerid':      'customer_id',
+                'tenure_months':   'tenure_in_months',
+                'monthly_charges': 'monthly_charges_amount'
+            }, inplace=True)
 
+            total_rows = len(df)
 
-            print("🔍 Validating Staging data against Bronze History...")
-            
-            # الكويري ده بيشوف هل فيه أي Customer ID في الـ Staging موجود قبل كدة في الـ Bronze؟
-            check_duplication_sql = """
-                SELECT COUNT(*) 
-                FROM staging_churn s
-                JOIN bronze.churn_raw b ON s.customer_id = b.customer_id;
-            """
-            
-            duplicates_count = hook.get_first(check_duplication_sql)[0]
+            # ── b2. Row-level validation (build error_details) ─────
+            df['error_details'] = ""
+            df.loc[df['customer_id'].isnull(),                          'error_details'] += "Missing ID; "
+            df.loc[df.get('tenure_in_months',  pd.Series(dtype=float)) < 0, 'error_details'] += "Negative Tenure; "
+            df.loc[df.get('monthly_charges_amount', pd.Series(dtype=float)) < 0, 'error_details'] += "Negative Charges; "
+            if 'gender' in df.columns:
+                df.loc[~df['gender'].isin(['Male', 'Female']),          'error_details'] += "Invalid Gender; "
+            dup_ids = df[df.duplicated(subset=['customer_id'], keep=False)]['customer_id'].dropna().unique()
+            df.loc[df['customer_id'].isin(dup_ids),                     'error_details'] += "Duplicate ID; "
+            df['error_details'] = df['error_details'].str.strip('; ')
 
-            if duplicates_count > 0:
-                msg = f"⛔ STOP! Found {duplicates_count} customers already exist in Bronze!"
-                print(msg)
-                
-                # أ. ابعت إيميل بالخطأ
+            bad_rows  = df[df['error_details'] != ""]
+            good_rows = df[df['error_details'] == ""].drop(columns=['error_details'])
+
+            # Export bad rows to quarantine (non-blocking)
+            if not bad_rows.empty:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                q_path = os.path.join(QUARANTINE_PATH, f"quarantine_{ts}_{file_name}.xlsx")
+                bad_rows.to_excel(q_path, index=False)
+                print(f"⚠️  {len(bad_rows)} bad row(s) quarantined → {q_path}")
+
+            if good_rows.empty:
+                raise AirflowException(f"File '{file_name}' has 0 valid rows after quality checks.")
+
+            # ── c. Duplicate check against Bronze history ──────────
+            good_rows.to_sql('staging_churn', con=engine,
+                             if_exists='append', index=False, schema='public')
+
+            dup_count = hook.get_first("""
+                SELECT COUNT(*)
+                FROM   staging_churn s
+                JOIN   bronze.churn_raw b ON s.customer_id = b.customer_id
+            """)[0]
+
+            if dup_count > 0:
+                hook.run("TRUNCATE TABLE staging_churn")
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                shutil.move(file_path,
+                            os.path.join(QUARANTINE_PATH, f"DUP_CONTENT_{ts}_{file_name}"))
+
+                err_msg = f"Blocked: {dup_count} customer(s) already exist in Bronze."
+                _register_file(hook, file_path, status='FAILED',
+                               error_msg=err_msg, dag_run_id=dag_run_id)
+
                 send_email(
                     to=['b4677396@gmail.com'],
                     subject=f"🚨 DUPLICATE DATA BLOCKED: {file_name}",
                     html_content=f"""
                     <h3>Pipeline Stopped by Validator</h3>
-                    <p>File <b>{file_name}</b> contains <b>{duplicates_count}</b> records that are already in the Bronze layer.</p>
-                    <p><b>Action:</b> Staging truncated, File moved to Quarantine.</p>
+                    <p>File <b>{file_name}</b> contains <b>{dup_count}</b> records already in Bronze.</p>
+                    <p><b>Action:</b> Staging truncated, file moved to Quarantine.</p>
                     """
                 )
-                
-                # ب. فضي الـ Staging فوراً عشان مفيش حاجة غلط تعدي
-                hook.run("TRUNCATE TABLE staging_churn")
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                quarantine_dest = os.path.join(QUARANTINE_PATH, f"DUP_CONTENT_{timestamp}_{file_name}")
-                shutil.move(file_path, quarantine_dest)
-                
-                raise AirflowException(msg)
+                raise AirflowException(err_msg)
 
-            else:
-                print("✅ Validation Passed: No duplicates found in Bronze.")
-        
-        # ... (تسجيل الـ Logs في audit table...)
-        processed_files.append(file_path)
+            print(f"✅  Validation passed. {len(good_rows)} clean row(s) staged.")
 
+            # ── d. Mark SUCCESS ────────────────────────────────────
+            _register_file(hook, file_path, status='SUCCESS',
+                           row_count=len(good_rows), dag_run_id=dag_run_id)
+
+            processed_files.append(file_path)
+
+        except AirflowException:
+            raise   # let Airflow handle it, already registered as FAILED above
+
+        except Exception as exc:
+            err_msg = str(exc)
+            _register_file(hook, file_path, status='FAILED',
+                           error_msg=err_msg, dag_run_id=dag_run_id)
+            print(f"❌  Unexpected error on {file_name}: {err_msg}")
+            raise AirflowException(f"Failed processing {file_name}: {err_msg}")
+
+    print(f"\n🏁  Incremental load complete. {len(processed_files)}/{len(new_files)} file(s) loaded successfully.")
     return processed_files
 
 # ===============================================================
@@ -374,6 +548,9 @@ def archive_processed_files(**context):
 #===========================================             Start Ouer DAG          ====================================#
 #====================================================================================================================#
 
+# Ensure the metadata table exists every time this DAG file is parsed by the scheduler
+_bootstrap_metadata_table()
+
 with DAG(
     dag_id="Data_Warehouse_Full_Pipeline",
     description="Full Churn Pipeline (Bronze -> Silver -> Gold)",
@@ -393,11 +570,14 @@ with DAG(
          python_callable= debug_smtp_connection
     )
 
-    #this task loads csv to staging table
+    #this task loads csv to staging table (incremental / idempotent)
     load_csv_task = PythonOperator(
         task_id='load_csv_to_staging_task',
         python_callable=load_csv_to_staging,
-        op_kwargs={'conn_id': conn_id}
+        op_kwargs={
+            'conn_id': conn_id,
+            'run_id' : '{{ run_id }}'   # Jinja → unique per DAG run for audit trail
+        }
     )
 
     #this task creates the necessary tables
@@ -484,6 +664,3 @@ with DAG(
 
     #  ترتيب التشغيل 
     debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check >> archive_task
-
-
-
