@@ -127,15 +127,15 @@ LEFT JOIN gold.dim_payment_method pm ON pm.payment_method = s.payment_method
 LEFT JOIN gold.dim_churn_reason cr ON TRIM(UPPER(cr.churn_reason)) = TRIM(UPPER(COALESCE(s.churn_reason, 'n/a')))
 
 LEFT JOIN gold.dim_services sv
-    ON sv.phone_service       = s.phone_service
-   AND sv.multiple_lines      = s.multiple_lines
-   AND sv.internet_service    = s.internet_service
-   AND sv.online_security     = s.online_security
-   AND sv.online_backup       = s.online_backup
-   AND sv.device_protection   = s.device_protection
-   AND sv.tech_support        = s.tech_support
-   AND sv.streaming_tv        = s.streaming_tv
-   AND sv.streaming_movies    = s.streaming_movies
+    ON sv.phone_service      IS NOT DISTINCT FROM s.phone_service
+   AND sv.multiple_lines     IS NOT DISTINCT FROM s.multiple_lines
+   AND sv.internet_service   IS NOT DISTINCT FROM s.internet_service
+   AND sv.online_security    IS NOT DISTINCT FROM s.online_security
+   AND sv.online_backup      IS NOT DISTINCT FROM s.online_backup
+   AND sv.device_protection  IS NOT DISTINCT FROM s.device_protection
+   AND sv.tech_support       IS NOT DISTINCT FROM s.tech_support
+   AND sv.streaming_tv       IS NOT DISTINCT FROM s.streaming_tv
+   AND sv.streaming_movies   IS NOT DISTINCT FROM s.streaming_movies
    -- هنا الجزء المهم الجديد لمنع التكرار في الفاكت
    WHERE NOT EXISTS (
     SELECT 1 FROM gold.fact_customer_churn f

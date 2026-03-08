@@ -54,7 +54,7 @@ SELECT
     country,
     state,
     city,
-    zip_code,
+    CAST(zip_code AS INTEGER),   -- ✅ FIX: staging VARCHAR → bronze INTEGER
     REPLACE(lat_long, '&', ','),
     latitude,
     longitude,

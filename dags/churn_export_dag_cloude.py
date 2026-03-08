@@ -53,7 +53,7 @@ SELECT
     31.2357 AS longitude,
     CASE WHEN p."phoneService" THEN 'Yes' ELSE 'No' END AS phone_service,
     CASE WHEN p."multipleLines" THEN 'Yes' ELSE 'No' END AS multiple_lines,
-    COALESCE(p."internetService", 'Fiber optic') AS internet_service_type,
+    COALESCE(p."internetService", 'Fiber optic') AS internet_service,
     CASE WHEN p."onlineSecurity" THEN 'Yes' ELSE 'No' END AS online_security,
     CASE WHEN p."onlineBackup" THEN 'Yes' ELSE 'No' END AS online_backup,
     CASE WHEN p."deviceProtection" THEN 'Yes' ELSE 'No' END AS device_protection,

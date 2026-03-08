@@ -520,29 +520,29 @@ def load_csv_to_staging(**kwargs):
 # --------- This function archives processed files --------------
 # ===============================================================
 def archive_processed_files(**context):
-    ti = context['ti']
-    file_paths = ti.xcom_pull(task_ids='load_csv_to_staging_task')
+    hook = PostgresHook(postgres_conn_id='churn_db_conn')
     
-    if not file_paths:
+    # جيب الملفات اللي status بتاعها SUCCESS ولسه في staging
+    rows = hook.get_records("""
+        SELECT file_path FROM public.pipeline_file_metadata
+        WHERE status = 'SUCCESS'
+        AND processed_at::DATE = CURRENT_DATE
+    """)
+
+    if not rows:
         print("No files to archive.")
         return
 
-    # 2. نقل الملفات للأرشيف
-    for file_path in file_paths:
+    for (file_path,) in rows:
         if os.path.exists(file_path):
             file_name = os.path.basename(file_path)
-            
-            # إضافة Timestamp للاسم عشان لو الملف اتكرر
             timestamp = datetime.now().strftime("%Y%m%d")
             archive_name = f"{file_name}_date_{timestamp}.csv"
             archive_full_path = os.path.join(ARCHIVE_PATH, archive_name)
-            
-            # نقل الملف (Move)
             shutil.move(file_path, archive_full_path)
-            print(f"✅ File successfully moved to archive: {archive_full_path}")
+            print(f"✅ Archived: {archive_full_path}")
         else:
-            print(f"⚠️ File not found (maybe moved already?): {file_path}")
-
+            print(f"⚠️ Already moved: {file_path}")
 
 #====================================================================================================================#
 #===========================================             Start Ouer DAG          ====================================#
@@ -657,10 +657,10 @@ with DAG(
     )
 
     archive_task = PythonOperator(
-        task_id='archive_files_task',
-        python_callable=archive_processed_files,
-        trigger_rule='all_success' 
-    )
+    task_id='archive_files_task',
+    python_callable=archive_processed_files,
+    trigger_rule=TriggerRule.ALL_DONE  # بدل all_success
+)
 
     #  ترتيب التشغيل 
     debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check >> archive_task
