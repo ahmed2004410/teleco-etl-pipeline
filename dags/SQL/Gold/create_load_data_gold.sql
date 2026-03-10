@@ -48,7 +48,7 @@ INSERT INTO gold.dim_customer (customer_id, gender, senior_citizen, partner, dep
 SELECT DISTINCT 
     customer_id,
     gender,
-    CASE WHEN senior_citizen IN ('1', 'Yes', 'True') THEN 1 ELSE 0 END,
+    CASE WHEN senior_citizen IN ('1', 'Yes', 'True') THEN '1' ELSE '0' END,
     partner,
     dependents,
     city, 
@@ -115,7 +115,8 @@ SELECT
     -- 2. CLTV: نفس الشيء، حولناه لنص أولاً
     CAST(NULLIF(REGEXP_REPLACE(s.cltv::TEXT, '[^0-9.]', '', 'g'), '') AS INTEGER),
     
-    s.churn_score::DECIMAL(5,2),
+    -- 3. Churn Score: safely handle 'n/a' and non-numeric values before casting
+    CAST(NULLIF(REGEXP_REPLACE(COALESCE(s.churn_score::TEXT, ''), '[^0-9.]', '', 'g'), '') AS DECIMAL(5,2)),
     '{{ ds }}'::DATE
 FROM silver.churn_raw s
 JOIN gold.dim_customer c ON c.customer_id = s.customer_id
@@ -139,5 +140,5 @@ LEFT JOIN gold.dim_services sv
    -- هنا الجزء المهم الجديد لمنع التكرار في الفاكت
    WHERE NOT EXISTS (
     SELECT 1 FROM gold.fact_customer_churn f
-    WHERE f.customer_key::VARCHAR = c.customer_key::VARCHAR
+    WHERE f.customer_key = c.customer_key
 );

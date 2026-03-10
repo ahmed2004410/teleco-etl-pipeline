@@ -74,5 +74,5 @@
         cltv,
         COALESCE(churn_reason, 'n/a')
     FROM bronze.churn_raw;
-END;
+--END;  -- orphaned; procedure was commented out
 --$$;

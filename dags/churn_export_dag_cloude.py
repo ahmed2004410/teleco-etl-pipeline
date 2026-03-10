@@ -1,9 +1,9 @@
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator   # ✅ fixed deprecated import
+from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.email import send_email
 from airflow.exceptions import AirflowSkipException
-from airflow.sdk import Variable                                          # ✅ fixed deprecated import
+from airflow.models import Variable
 from datetime import datetime, timedelta
 import os
 
@@ -19,14 +19,14 @@ def _get_recipients():
         r.strip()
         for r in Variable.get(
             "pipeline_alert_recipients",
-            default="b4677396@gmail.com"
+            default_var="b4677396@gmail.com"
         ).split(",")
         if r.strip()
     ]
 
 
 def _get_airflow_url():
-    return Variable.get("airflow_base_url", default="http://localhost:8080")
+    return Variable.get("airflow_base_url", default_var="http://localhost:8080")
 
 
 # ================================================================
@@ -371,7 +371,7 @@ def export_data_to_csv(**context):
     # ── Read watermark ───────────────────────────────────────────────────────
     last_watermark = Variable.get(
         WATERMARK_VARIABLE_KEY,
-        default=INITIAL_LOAD_DATE,
+        default_var=INITIAL_LOAD_DATE,
     )
     run_timestamp = task_start.strftime("%Y-%m-%d %H:%M:%S")
 

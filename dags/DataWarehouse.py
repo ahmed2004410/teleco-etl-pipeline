@@ -2,6 +2,8 @@ from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator, 
 from airflow.providers.slack.hooks.slack_webhook import SlackWebhookHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.python import PythonOperator
+
+from scripts.train_churn_model import train_and_predict_churn
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.exceptions import AirflowException
 from airflow.utils.email import send_email 
@@ -817,22 +819,28 @@ with DAG(
     SELECT COUNT(*) 
     FROM gold.fact_customer_churn
     WHERE 
-        -- 1. التأكد إن مفاتيح الربط مش بـ Null (Orphan Records Check)
+        -- 1. Orphan Records Check
         customer_key IS NULL 
         OR contract_key IS NULL
         OR service_key IS NULL
         
-        -- 2. فحص الأرقام النهائية
+        -- 2. Numeric validity
         OR monthly_charges < 0
         OR total_charges < 0
         
-        -- 3. فحص الـ Scores
-        OR churn_score < 0 
-        OR churn_score > 100; -- افتراضاً إن السكور من 0 لـ 100
+        -- 3. Churn score (NULL allowed; 'n/a' converted to NULL in load)
+        OR (churn_score IS NOT NULL AND (churn_score < 0 OR churn_score > 100))
     """,
     pass_value=0,
     tolerance=0,
     on_success_callback=notify_pipeline_success
+    )
+
+    # ML task: train XGBoost churn model and save predictions to gold.churn_predictions
+    train_churn_task = PythonOperator(
+        task_id='train_churn_model_task',
+        python_callable=train_and_predict_churn,
+        op_kwargs={'conn_id': conn_id},
     )
 
     archive_task = PythonOperator(
@@ -842,4 +850,4 @@ with DAG(
 )
 
     #  ترتيب التشغيل 
-    debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check >> archive_task
+    debug_task >> create_tables_Task >> load_csv_task >> fill_bronze >> dq_bronze_check >> fill_silver >> clean_silver_task >> fill_gold >> dq_gold_check >> train_churn_task >> archive_task

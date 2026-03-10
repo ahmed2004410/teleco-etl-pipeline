@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS gold.dim_services (
 -- 6. جدول الحقائق
 CREATE TABLE IF NOT EXISTS gold.fact_customer_churn (
     fact_id SERIAL PRIMARY KEY,
-    customer_key VARCHAR(50),
+    customer_key INTEGER,
     contract_key INT,
     payment_method_key INT,
     churn_reason_key INT,
@@ -59,4 +59,15 @@ CREATE TABLE IF NOT EXISTS gold.fact_customer_churn (
     cltv DECIMAL(12,2),
     churn_score DECIMAL(5,2),
     run_date DATE
+);
+
+-- 7. جدول تنبؤات التسرب (ML Model Output)
+CREATE TABLE IF NOT EXISTS gold.churn_predictions (
+    id SERIAL PRIMARY KEY,
+    customer_key INTEGER NOT NULL,
+    customer_id VARCHAR(50) NOT NULL,
+    churn_prediction SMALLINT NOT NULL,
+    churn_probability DECIMAL(5,4) NOT NULL,
+    model_run_date TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE(customer_key)
 );
