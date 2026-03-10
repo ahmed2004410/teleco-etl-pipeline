@@ -7,6 +7,8 @@ from airflow.exceptions import AirflowException
 from airflow.utils.email import send_email 
 from datetime import datetime, timedelta
 from airflow.hooks.base import BaseHook
+from airflow.models import Variable
+from datetime import datetime
 from airflow import DAG
 import pandas as pd
 import shutil 
@@ -197,6 +199,187 @@ def notify_email_on_failure(context):
         print(f" Failed to send email: {e}")
 
 # ===============================================================
+# ------------This function sends email on success --------------
+# ===============================================================
+DEFAULT_RECIPIENTS = ["b4677396@gmail.com"]
+AIRFLOW_BASE_URL = Variable.get("airflow_base_url", default_var="https://your-airflow-instance")
+
+
+def notify_pipeline_success(context):
+    """
+    Airflow success callback — sends a structured HTML summary email
+    when a full DAG run completes successfully.
+
+    Reads recipients from the Airflow Variable `pipeline_alert_recipients`
+    (comma-separated). Falls back to DEFAULT_RECIPIENTS if the variable
+    is not set.
+    """
+    try:
+        # ── Extract context variables ────────────────────────────────────────
+        dag_id    = context["dag"].dag_id
+        run_id    = context["run_id"]
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # ── Deep-link to the Airflow Grid view for this specific run ─────────
+        run_url = (
+            f"{AIRFLOW_BASE_URL}/dags/{dag_id}/grid"
+            f"?dag_run_id={run_id}"
+        )
+
+        # ── Config-driven recipient list (no hardcoding) ─────────────────────
+        raw_recipients = Variable.get(
+            "pipeline_alert_recipients",
+            default_var=",".join(DEFAULT_RECIPIENTS),
+        )
+        recipients = [r.strip() for r in raw_recipients.split(",") if r.strip()]
+
+        # ── Email content ────────────────────────────────────────────────────
+        subject = f"✅ {dag_id} — Pipeline Run Complete"
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+          <title>{subject}</title>
+          <style>
+            body      {{ font-family: Arial, sans-serif; background: #f4f4f4;
+                         margin: 0; padding: 0; color: #333; }}
+            .wrapper  {{ max-width: 600px; margin: 32px auto; background: #fff;
+                         border-radius: 8px; overflow: hidden;
+                         box-shadow: 0 2px 8px rgba(0,0,0,.08); }}
+            .header   {{ background: #1a1a2e; padding: 28px 32px; }}
+            .header h1{{ color: #fff; margin: 0; font-size: 20px;
+                         font-weight: 600; letter-spacing: .3px; }}
+            .header p {{ color: #a0a8c0; margin: 6px 0 0; font-size: 13px; }}
+            .body     {{ padding: 28px 32px; }}
+            .body p   {{ line-height: 1.6; font-size: 14px; }}
+            table     {{ width: 100%; border-collapse: collapse;
+                         margin: 20px 0; font-size: 13px; }}
+            th        {{ background: #f0f2f5; text-align: left;
+                         padding: 10px 12px; color: #555; font-weight: 600;
+                         border-bottom: 2px solid #e0e0e0; }}
+            td        {{ padding: 10px 12px; border-bottom: 1px solid #eee;
+                         vertical-align: middle; }}
+            tr:last-child td {{ border-bottom: none; }}
+            .badge    {{ display: inline-block; background: #e6f9f0;
+                         color: #1a8a5a; border-radius: 4px; padding: 2px 8px;
+                         font-size: 12px; font-weight: 600; }}
+            .cta      {{ display: block; width: fit-content; margin: 24px 0;
+                         background: #1a1a2e; color: #fff !important;
+                         text-decoration: none; padding: 12px 24px;
+                         border-radius: 6px; font-size: 14px;
+                         font-weight: 600; letter-spacing: .3px; }}
+            .footer   {{ background: #f9f9f9; padding: 16px 32px;
+                         font-size: 12px; color: #999;
+                         border-top: 1px solid #eee; }}
+            .footer a {{ color: #666; text-decoration: none; }}
+          </style>
+        </head>
+        <body>
+          <div class="wrapper">
+
+            <!-- Header -->
+            <div class="header">
+              <h1>✅ Pipeline Completed Successfully</h1>
+              <p>Your data is fresh and ready for downstream consumption.</p>
+            </div>
+
+            <!-- Body -->
+            <div class="body">
+              <p>
+                The <strong>{dag_id}</strong> pipeline has finished its full run
+                without errors. All layers of your data architecture have been
+                refreshed and are available immediately.
+              </p>
+
+              <!-- Run Summary -->
+              <table>
+                <tr>
+                  <th colspan="2">📋 Run Summary</th>
+                </tr>
+                <tr>
+                  <td><strong>Pipeline</strong></td>
+                  <td>{dag_id}</td>
+                </tr>
+                <tr>
+                  <td><strong>Run ID</strong></td>
+                  <td><code>{run_id}</code></td>
+                </tr>
+                <tr>
+                  <td><strong>Completed At</strong></td>
+                  <td>{timestamp}</td>
+                </tr>
+                <tr>
+                  <td><strong>Status</strong></td>
+                  <td><span class="badge">✅ Success</span></td>
+                </tr>
+              </table>
+
+              <!-- Layer Status -->
+              <table>
+                <tr>
+                  <th>Layer</th>
+                  <th>Purpose</th>
+                  <th>Status</th>
+                </tr>
+                <tr>
+                  <td>🥉 <strong>Bronze</strong></td>
+                  <td>Raw ingestion</td>
+                  <td><span class="badge">✅ Updated</span></td>
+                </tr>
+                <tr>
+                  <td>🥈 <strong>Silver</strong></td>
+                  <td>Cleaned &amp; transformed</td>
+                  <td><span class="badge">✅ Updated</span></td>
+                </tr>
+                <tr>
+                  <td>🥇 <strong>Gold</strong></td>
+                  <td>Business-ready aggregates</td>
+                  <td><span class="badge">✅ Updated</span></td>
+                </tr>
+              </table>
+
+              <!-- CTA -->
+              <a class="cta" href="{run_url}">→ View Run in Airflow</a>
+
+              <p style="font-size:13px; color:#777;">
+                No action is required. If this run was unexpected or you have
+                questions, contact your data team or visit the
+                <a href="{AIRFLOW_BASE_URL}/docs">Help Center</a>.
+              </p>
+            </div>
+
+            <!-- Footer -->
+            <div class="footer">
+              You are receiving this because you are subscribed to pipeline alerts.
+              &nbsp;·&nbsp;
+              <a href="{AIRFLOW_BASE_URL}">Airflow Dashboard</a>
+              &nbsp;·&nbsp;
+              <a href="{AIRFLOW_BASE_URL}/docs">Help Center</a>
+            </div>
+
+          </div>
+        </body>
+        </html>
+        """
+
+        # ── Send ─────────────────────────────────────────────────────────────
+        send_email(
+            to=recipients,
+            subject=subject,
+            html_content=html_content,
+        )
+
+        print(f"--- Pipeline success email sent → {recipients} ---")
+
+    except Exception as e:
+        print(f"[notify_pipeline_success] Failed to send email: {e}")
+        raise   # re-raise so Airflow marks the callback as failed, not silently swallowed
+
+
+# ===============================================================
 # ---------- This is the master failure callback function -------
 # ===============================================================
 def failure_callback_manager(context):
@@ -206,7 +389,8 @@ def failure_callback_manager(context):
 default_args = {
     'owner': 'airflow',
     'retries': 0,
-    'on_failure_callback': failure_callback_manager, 
+    'on_failure_callback': failure_callback_manager,
+    #'on_success_callback': notify_success, # السطر ده هو اللي هيشغل إيميل النجاح
     'email_on_failure': False, 
 }
 
@@ -223,12 +407,6 @@ def debug_smtp_connection():
     except Exception as e:
         print(f" Could not find smtp_default connection: {e}")
 
-default_args = {
-    'owner': 'airflow',
-    'retries': 0,
-    'on_failure_callback': failure_callback_manager, 
-    'email_on_failure': False, 
-}
 #================= Modified: Isolate bad rows, export to Excel, then clean ===================#
 def clean_or_stop_silver(**kwargs):
     hook = PostgresHook(postgres_conn_id='churn_db_conn')
@@ -653,7 +831,8 @@ with DAG(
         OR churn_score > 100; -- افتراضاً إن السكور من 0 لـ 100
     """,
     pass_value=0,
-    tolerance=0
+    tolerance=0,
+    on_success_callback=notify_pipeline_success
     )
 
     archive_task = PythonOperator(
