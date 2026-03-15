@@ -8,11 +8,13 @@ CREATE SCHEMA IF NOT EXISTS gold;
 -- ===================================================
 --TRUNCATE TABLE gold.dim_contract CASCADE;
 INSERT INTO gold.dim_contract(contract_type)
-SELECT DISTINCT contract 
+SELECT DISTINCT 
+    REPLACE(contract, 'Month-to-month', 'Month-to-Month') AS contract_type
 FROM silver.churn_raw s
 WHERE contract IS NOT NULL
 AND NOT EXISTS (
-    SELECT 1 FROM gold.dim_contract g WHERE g.contract_type = s.contract
+    SELECT 1 FROM gold.dim_contract g 
+    WHERE g.contract_type = REPLACE(s.contract, 'Month-to-month', 'Month-to-Month')
 );
 
 -- ===================================================
@@ -101,7 +103,6 @@ SELECT
     cr.churn_reason_key,
     sv.service_key,
     
-    -- 1. Tenure: حولناه لنص، نظفناه، ثم لرقم  
     CAST(NULLIF(REGEXP_REPLACE(s.tenure_in_months::TEXT, '[^0-9.]', '', 'g'), '') AS INTEGER),
     
     s.monthly_charges_amount::DECIMAL(10,2),
@@ -121,7 +122,7 @@ SELECT
 FROM silver.churn_raw s
 JOIN gold.dim_customer c ON c.customer_id = s.customer_id
 
-LEFT JOIN gold.dim_contract ct ON ct.contract_type = s.contract
+LEFT JOIN gold.dim_contract ct ON ct.contract_type = REPLACE(s.contract, 'Month-to-month', 'Month-to-Month')
 
 LEFT JOIN gold.dim_payment_method pm ON pm.payment_method = s.payment_method
 

@@ -13,6 +13,7 @@ from airflow.models import Variable
 from datetime import datetime
 from airflow import DAG
 import pandas as pd
+import hashlib
 import shutil 
 import glob
 import os 
@@ -61,10 +62,8 @@ def _bootstrap_metadata_table():
         print(f"⚠️  Could not bootstrap metadata table: {e}")
 
 # ===============================================================
-# ----- Incremental Load Helpers --------------------------------
+# ---------------- Incremental Load Helpers ---------------------
 # ===============================================================
-import hashlib
-
 def _md5_of_file(path: str) -> str:
     """Return MD5 hex-digest of a file (for change detection)."""
     h = hashlib.md5()
@@ -205,8 +204,6 @@ def notify_email_on_failure(context):
 # ===============================================================
 DEFAULT_RECIPIENTS = ["b4677396@gmail.com"]
 AIRFLOW_BASE_URL = Variable.get("airflow_base_url", default_var="https://your-airflow-instance")
-
-
 def notify_pipeline_success(context):
     """
     Airflow success callback — sends a structured HTML summary email
@@ -380,7 +377,6 @@ def notify_pipeline_success(context):
         print(f"[notify_pipeline_success] Failed to send email: {e}")
         raise   # re-raise so Airflow marks the callback as failed, not silently swallowed
 
-
 # ===============================================================
 # ---------- This is the master failure callback function -------
 # ===============================================================
@@ -409,7 +405,9 @@ def debug_smtp_connection():
     except Exception as e:
         print(f" Could not find smtp_default connection: {e}")
 
-#================= Modified: Isolate bad rows, export to Excel, then clean ===================#
+# ===============================================================
+#--- Modified: Isolate bad rows, export to Excel, then clean ----
+# ===============================================================
 def clean_or_stop_silver(**kwargs):
     hook = PostgresHook(postgres_conn_id='churn_db_conn')
     
@@ -544,7 +542,9 @@ def clean_or_stop_silver(**kwargs):
         hook.run(delete_sql)
         print("Silver table cleaned. Bad data removed.")
 
-#============================ this function clean the file name =======================
+# ===============================================================
+# -------------- this function clean the file name --------------
+# ===============================================================
 def clean_filename(filename):
     base_name = os.path.splitext(filename)[0]
     prefixes_to_remove = ['quarantine', 'remaining_errors', 'clean', 'fixed', 'errors']
@@ -558,7 +558,9 @@ def clean_filename(filename):
     if not base_name: base_name = "data"
     return base_name
 
-# ===================== this function loads CSV to staging table AND archives the file ==================#
+# ===============================================================
+# ----- loads CSV to staging table AND archives the file --------
+# ===============================================================
 def load_csv_to_staging(**kwargs):
     """
     Incremental / Idempotent loader.
@@ -702,28 +704,38 @@ def load_csv_to_staging(**kwargs):
 def archive_processed_files(**context):
     hook = PostgresHook(postgres_conn_id='churn_db_conn')
     
-    # جيب الملفات اللي status بتاعها SUCCESS ولسه في staging
+    # 1. جيب الملفات اللي خلصت بنجاح
     rows = hook.get_records("""
         SELECT file_path FROM public.pipeline_file_metadata
         WHERE status = 'SUCCESS'
-        AND processed_at::DATE = CURRENT_DATE
     """)
 
     if not rows:
-        print("No files to archive.")
+        print("No files to archive at the moment.")
         return
 
     for (file_path,) in rows:
         if os.path.exists(file_path):
-            file_name = os.path.basename(file_path)
-            timestamp = datetime.now().strftime("%Y%m%d")
-            archive_name = f"{file_name}_date_{timestamp}.csv"
+            # 2. افصل اسم الملف عن الامتداد عشان الـ Naming يكون صح
+            base_name, file_extension = os.path.splitext(os.path.basename(file_path))
+            
+            # 3. ضيف الوقت بالثواني لمنع الـ Overwrite لو في ملفين بنفس الاسم
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_name = f"{base_name}_archived_{timestamp}{file_extension}"
             archive_full_path = os.path.join(ARCHIVE_PATH, archive_name)
+            
+            # 4. انقل الملف
             shutil.move(file_path, archive_full_path)
             print(f"✅ Archived: {archive_full_path}")
+            
+            # 5. خطوة مهمة جداً: تحديث حالة الملف عشان ميتسحبش تاني بالغلط
+            hook.run(f"""
+                UPDATE public.pipeline_file_metadata 
+                SET status = 'ARCHIVED' 
+                WHERE file_path = '{file_path}'
+            """)
         else:
-            print(f"⚠️ Already moved: {file_path}")
-
+            print(f"⚠️ File not found on disk (maybe already moved): {file_path}")
 #====================================================================================================================#
 #===========================================             Start Ouer DAG          ====================================#
 #====================================================================================================================#
@@ -846,7 +858,7 @@ with DAG(
     archive_task = PythonOperator(
     task_id='archive_files_task',
     python_callable=archive_processed_files,
-    trigger_rule=TriggerRule.ALL_DONE  # بدل all_success
+    trigger_rule=TriggerRule.ALL_SUCCESS  # بدل all_done عشان نتأكد إن الأرشفة بتحصل بس لو كل الخطوات نجحت
 )
 
     #  ترتيب التشغيل 

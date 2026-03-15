@@ -38,7 +38,11 @@ churn_label		  VARCHAR (20),
 churn_value		  INT,
 churn_score		  INT,
 cltv			  INT,
-churn_reason	  VARCHAR (200)
+churn_reason	  VARCHAR (200),
+created_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+updated_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+record_type       VARCHAR (20)     NOT NULL DEFAULT 'upserted',
+UNIQUE (customer_id)
 );
 
 CREATE TABLE IF NOT EXISTS bronze.processed_files (

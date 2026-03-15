@@ -1,17 +1,21 @@
-
 /*
 ===============================================================================
-Bronze Layer Loading Script (Postgres Version)
-الهدف: نقل البيانات من الجدول المؤقت (staging) إلى الجدول البرونزي
+Bronze Layer Loading Script (PostgreSQL - Upsert / Merge)
+الهدف: نقل البيانات من Staging إلى Bronze مع الحفاظ على البيانات التاريخية وتحديث المكرر
 ===============================================================================
 */
 
--- 1. تنظيف الجدول البرونزي (بدلاً من Truncate التقليدية)
+-- 1. لا نستخدم TRUNCATE هنا للحفاظ على الـ Historical Data.
 
-TRUNCATE TABLE bronze.churn_raw;
-
--- 2. إدخال البيانات (مع معالجة lat_long في نفس الخطوة)
+-- 2. إدخال البيانات أو تحديثها (Upsert)
 INSERT INTO bronze.churn_raw (
+    customer_id, gender, senior_citizen, partner, dependents, country, state, city, zip_code, 
+    lat_long, latitude, longitude, phone_service, multiple_lines, internet_service, online_security, 
+    online_backup, device_protection, tech_support, streaming_tv, streaming_movies, paperless_billing, 
+    payment_method, contract, tenure_months, monthly_charges, total_charges, churn_label, churn_value, 
+    churn_score, cltv, churn_reason, created_at, updated_at, record_type
+)
+SELECT 
     customer_id,
     gender,
     senior_citizen,
@@ -20,8 +24,12 @@ INSERT INTO bronze.churn_raw (
     country,
     state,
     city,
-    zip_code,
-    lat_long,
+    -- ✅ Safe Casting: يحول الفراغات لـ NULL بدل ما يضرب Error
+    CAST(NULLIF(TRIM(zip_code::TEXT), '') AS INTEGER), 
+    
+    -- ✅ Fix: دمج خط الطول والعرض لإنشاء lat_long لو مش موجود في Source
+    CAST(latitude AS TEXT) || ',' || CAST(longitude AS TEXT) AS lat_long, 
+    
     latitude,
     longitude,
     phone_service,
@@ -36,46 +44,34 @@ INSERT INTO bronze.churn_raw (
     paperless_billing,
     payment_method,
     contract,
-    tenure_months,
-    monthly_charges,
-    total_charges,
-    churn_label,
-    churn_value,
-    churn_score,
-    cltv,
-    churn_reason
-)
-SELECT 
-    customer_id,             -- الاسم الجديد (بدلاً من "CustomerID")
-    gender,
-    senior_citizen,          -- الاسم الجديد (بدلاً من "Senior Citizen")
-    partner,
-    dependents,
-    country,
-    state,
-    city,
-    CAST(zip_code AS INTEGER),   -- ✅ FIX: staging VARCHAR → bronze INTEGER
-    REPLACE(lat_long, '&', ','),
-    latitude,
-    longitude,
-    phone_service,
-    multiple_lines,
-    internet_service,
-    online_security,
-    online_backup,
-    device_protection,
-    tech_support,
-    streaming_tv,
-    streaming_movies,
-    paperless_billing,
-    payment_method,
-    contract,
-    tenure_in_months,       
+    tenure_in_months,
     monthly_charges_amount,
     total_charges,
     churn_label,
     churn_value,
     churn_score,
     cltv,
-    churn_reason
-FROM public.staging_churn;
+    churn_reason,
+    CURRENT_TIMESTAMP, -- created_at
+    CURRENT_TIMESTAMP, -- updated_at
+    'upserted'
+FROM public.staging_churn
+
+ON CONFLICT (customer_id) 
+DO UPDATE SET 
+    gender = EXCLUDED.gender,
+    senior_citizen = EXCLUDED.senior_citizen,
+    partner = EXCLUDED.partner,
+    dependents = EXCLUDED.dependents,
+    state = EXCLUDED.state,
+    city = EXCLUDED.city,
+    zip_code = EXCLUDED.zip_code,
+    lat_long = EXCLUDED.lat_long,
+    contract = EXCLUDED.contract,
+    tenure_months = EXCLUDED.tenure_months,
+    monthly_charges = EXCLUDED.monthly_charges,
+    total_charges = EXCLUDED.total_charges,
+    churn_label = EXCLUDED.churn_label,
+    churn_value = EXCLUDED.churn_value,
+    updated_at = CURRENT_TIMESTAMP, -- تحديث وقت التعديل
+    record_type = 'updated';

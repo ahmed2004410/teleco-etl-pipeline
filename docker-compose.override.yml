@@ -1,4 +1,4 @@
 services:
   postgres:
-    ports: !reset
+    ports:
       - "5433:5432"
