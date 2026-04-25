@@ -5,6 +5,7 @@ from airflow.utils.email import send_email
 from airflow.exceptions import AirflowSkipException
 from airflow.models import Variable
 from datetime import datetime, timedelta
+import json
 import os
 
 # ================================================================
@@ -12,6 +13,21 @@ import os
 # ================================================================
 WATERMARK_VARIABLE_KEY = "churn_export_last_watermark"
 INITIAL_LOAD_DATE      = "1970-01-01 00:00:00"
+
+
+def _debug_log(location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
+    payload = {
+        "sessionId": "4a9b1e",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(datetime.now().timestamp() * 1000),
+    }
+    with open("debug-4a9b1e.log", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    print(f"DEBUG_NDJSON {json.dumps(payload, ensure_ascii=True)}")
 
 
 def _get_recipients():
@@ -362,6 +378,7 @@ ORDER BY GREATEST(u."createdAt", u."updatedAt") ASC
 def export_data_to_csv(**context):
     ti         = context['ti']
     task_start = datetime.now()
+    run_id     = ti.run_id
 
     # ── Resolve paths ────────────────────────────────────────────────────────
     airflow_home = os.getenv('AIRFLOW_HOME', '/usr/local/airflow')
@@ -376,10 +393,126 @@ def export_data_to_csv(**context):
     run_timestamp = task_start.strftime("%Y-%m-%d %H:%M:%S")
 
     print(f"Watermark window: {last_watermark} -> {run_timestamp}")
+    # region agent log
+    _debug_log(
+        "churn_export_dag_cloude.py:395",
+        "export start window",
+        {
+            "dag_id": ti.dag_id,
+            "task_id": ti.task_id,
+            "watermark_from": last_watermark,
+            "watermark_to": run_timestamp,
+        },
+        run_id,
+        "H4",
+    )
+    # endregion
 
     # ── Query ────────────────────────────────────────────────────────────────
     try:
         hook = PostgresHook(postgres_conn_id='backend_postgres_db')
+        db_ctx = hook.get_first(
+            """
+            SELECT
+              current_database()::text,
+              current_schema()::text,
+              current_setting('search_path')::text
+            """
+        )
+        # region agent log
+        _debug_log(
+            "churn_export_dag_cloude.py:415",
+            "db context",
+            {
+                "current_database": db_ctx[0] if db_ctx else None,
+                "current_schema": db_ctx[1] if db_ctx else None,
+                "search_path": db_ctx[2] if db_ctx else None,
+            },
+            run_id,
+            "H2",
+        )
+        # endregion
+
+        rels = hook.get_first(
+            """
+            SELECT
+              to_regclass('"User"')::text,
+              to_regclass('public."User"')::text,
+              to_regclass('public.user')::text,
+              to_regclass('"UserPersonalization"')::text,
+              to_regclass('"BillingHistory"')::text
+            """
+        )
+        # region agent log
+        _debug_log(
+            "churn_export_dag_cloude.py:437",
+            "relation probes",
+            {
+                "quoted_User": rels[0] if rels else None,
+                "public_quoted_User": rels[1] if rels else None,
+                "public_user": rels[2] if rels else None,
+                "quoted_UserPersonalization": rels[3] if rels else None,
+                "quoted_BillingHistory": rels[4] if rels else None,
+            },
+            run_id,
+            "H1",
+        )
+        # endregion
+
+        similar_tables = hook.get_records(
+            """
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE lower(table_name) LIKE '%user%'
+               OR lower(table_name) LIKE '%billing%'
+            ORDER BY table_schema, table_name
+            LIMIT 20
+            """
+        )
+        # region agent log
+        _debug_log(
+            "churn_export_dag_cloude.py:463",
+            "similar tables sample",
+            {"tables": similar_tables},
+            run_id,
+            "H3",
+        )
+        # endregion
+
+        # Fail fast with actionable diagnostics if source tables are missing.
+        if not rels or rels[0] is None or rels[3] is None or rels[4] is None:            # region agent log
+            _debug_log(
+                "churn_export_dag_cloude.py:474",
+                "source tables missing",
+                {
+                    "required_relations": [
+                        "\"User\"",
+                        "\"UserPersonalization\"",
+                        "\"BillingHistory\"",
+                    ],
+                    "probed_relations": {
+                        "quoted_User": rels[0] if rels else None,
+                        "public_quoted_User": rels[1] if rels else None,
+                        "public_user": rels[2] if rels else None,
+                        "quoted_UserPersonalization": rels[3] if rels else None,
+                        "quoted_BillingHistory": rels[4] if rels else None,
+                    },
+                    "db_context": {
+                        "current_database": db_ctx[0] if db_ctx else None,
+                        "current_schema": db_ctx[1] if db_ctx else None,
+                        "search_path": db_ctx[2] if db_ctx else None,
+                    },
+                },
+                run_id,
+                "H1",
+            )
+            # endregion
+            raise Exception(
+                "Source tables not found in connection 'backend_postgres_db'. "
+                "Expected tables: \"User\", \"UserPersonalization\", \"BillingHistory\". "
+                "Verify that backend_postgres_db points to the backend source database/schema."
+            )
+
         df   = hook.get_pandas_df(
             INCREMENTAL_SQL,
             parameters={
@@ -388,6 +521,15 @@ def export_data_to_csv(**context):
             },
         )
     except Exception as e:
+        # region agent log
+        _debug_log(
+            "churn_export_dag_cloude.py:479",
+            "query failed",
+            {"error": str(e)},
+            run_id,
+            "H1",
+        )
+        # endregion
         raise Exception(f"Database extraction failed: {e}")
 
     # ── Guard: nothing new → send SKIP email then skip ───────────────────────

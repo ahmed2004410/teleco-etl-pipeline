@@ -1,0 +1,154 @@
+"""
+check_connection.py
+====================
+شغّل الكود ده على السيرفر اللي فيه Airflow:
+    python check_connection.py
+
+هيطلعلك:
+  1. كل الـ connections الموجودة في Airflow
+  2. تفاصيل backend_postgres_db (host, port, schema, user)
+  3. يتحقق إيه الداتابيز الحالي وفيه إيه من جداول
+"""
+
+import os
+import sys
+
+# ── 1. تأكد إن Airflow موجود ──────────────────────────────────────────────────
+try:
+    from airflow.models import Connection
+    from airflow.utils.db import create_session
+    from airflow.providers.postgres.hooks.postgres import PostgresHook
+except ImportError:
+    sys.exit("❌  Airflow مش موجود في البيئة دي. شغّل الكود من نفس البيئة اللي فيها Airflow.")
+
+CONN_ID = "backend_postgres_db"   # ← غيّره لو الـ ID مختلف
+
+print("\n" + "═" * 60)
+print("  🔍  Airflow Connection Inspector")
+print("═" * 60)
+
+
+# ── 2. اطبع كل الـ connections الموجودة ──────────────────────────────────────
+print("\n📋  كل الـ Connections المسجّلة في Airflow:\n")
+try:
+    with create_session() as session:
+        all_conns = session.query(Connection).order_by(Connection.conn_id).all()
+
+    if not all_conns:
+        print("   (لا يوجد connections)")
+    else:
+        for c in all_conns:
+            print(f"   • {c.conn_id:40s}  [{c.conn_type}]")
+except Exception as e:
+    print(f"   ⚠️  مش قادر يقرأ الـ connections: {e}")
+
+
+# ── 3. تفاصيل الـ connection المطلوب ─────────────────────────────────────────
+print(f"\n🔌  تفاصيل Connection:  {CONN_ID}\n")
+try:
+    with create_session() as session:
+        conn = session.query(Connection).filter(
+            Connection.conn_id == CONN_ID
+        ).first()
+
+    if conn is None:
+        print(f"   ❌  Connection '{CONN_ID}' مش موجود خالص!\n")
+        print("   👉  راجع الأسماء في القائمة فوق واختار الصح.")
+        sys.exit(1)
+
+    print(f"   conn_id   : {conn.conn_id}")
+    print(f"   conn_type : {conn.conn_type}")
+    print(f"   host      : {conn.host or '(فاضي)'}")
+    print(f"   port      : {conn.port or '(فاضي — default 5432)'}")
+    print(f"   schema    : {conn.schema or '(فاضي)'}")
+    print(f"   login     : {conn.login or '(فاضي)'}")
+    print(f"   password  : {'*****' if conn.password else '(فاضي)'}")
+    print(f"   extra     : {conn.extra or '(فاضي)'}")
+
+except Exception as e:
+    print(f"   ⚠️  خطأ أثناء قراءة تفاصيل الـ connection: {e}")
+    sys.exit(1)
+
+
+# ── 4. اتصل فعلياً وشوف الداتابيز ───────────────────────────────────────────
+print(f"\n🛢️   اتصال فعلي بـ PostgreSQL ...\n")
+try:
+    hook = PostgresHook(postgres_conn_id=CONN_ID)
+
+    # context الداتابيز
+    row = hook.get_first("""
+        SELECT
+            current_database()::text  AS db,
+            current_schema()::text    AS schema,
+            current_setting('search_path')::text AS search_path,
+            version()::text           AS pg_version
+    """)
+    print(f"   current_database  : {row[0]}")
+    print(f"   current_schema    : {row[1]}")
+    print(f"   search_path       : {row[2]}")
+    print(f"   postgres_version  : {row[3][:60]}")
+
+    # ── 5. ابحث عن الجداول المطلوبة ──────────────────────────────────────────
+    print("\n🔎  البحث عن جداول User / UserPersonalization / BillingHistory:\n")
+
+    probes = hook.get_first("""
+        SELECT
+            to_regclass('"User"')::text,
+            to_regclass('public."User"')::text,
+            to_regclass('"UserPersonalization"')::text,
+            to_regclass('public."UserPersonalization"')::text,
+            to_regclass('"BillingHistory"')::text,
+            to_regclass('public."BillingHistory"')::text
+    """)
+    labels = [
+        '"User"',
+        'public."User"',
+        '"UserPersonalization"',
+        'public."UserPersonalization"',
+        '"BillingHistory"',
+        'public."BillingHistory"',
+    ]
+    all_found = True
+    for label, val in zip(labels, probes):
+        status = "✅  موجود" if val else "❌  مش موجود"
+        if not val:
+            all_found = False
+        print(f"   {label:40s} → {status}")
+
+    # ── 6. اطبع كل الـ schemas والجداول في الداتابيز ─────────────────────────
+    print("\n📂  كل الـ Schemas في الداتابيز الحالي:\n")
+    schemas = hook.get_records("""
+        SELECT schema_name
+        FROM information_schema.schemata
+        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+        ORDER BY schema_name
+    """)
+    for (s,) in schemas:
+        tables = hook.get_records(f"""
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = '{s}'
+            ORDER BY table_name
+            LIMIT 30
+        """)
+        names = ", ".join(t[0] for t in tables)
+        suffix = "  ... (أكتر من 30)" if len(tables) == 30 else ""
+        print(f"   [{s}]  →  {names or '(فاضي)'}{suffix}")
+
+    # ── 7. الخلاصة والحل ────────────────────────────────────────────────────
+    print("\n" + "═" * 60)
+    if all_found:
+        print("✅  كل الجداول موجودة — الـ connection صح!")
+    else:
+        print("❌  الجداول مش موجودة في الداتابيز ده.")
+        print("""
+الحل:
+  1. افتح Airflow UI  →  Admin  →  Connections  →  backend_postgres_db
+  2. غيّر الـ Schema لاسم الداتابيز الصح (اللي فيه الجداول)
+  3. أو غيّر الـ Host/Port لو السيرفر نفسه غلط
+        """)
+    print("═" * 60 + "\n")
+
+except Exception as e:
+    print(f"\n   ❌  فشل الاتصال: {e}\n")
+    print("   تحقق من الـ host / port / user / password في الـ connection.")

@@ -39,6 +39,7 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer          # ✅ FIX 1: added
 from sklearn.preprocessing import LabelEncoder
 
 logger = logging.getLogger(__name__)
@@ -179,8 +180,26 @@ def train_churn_model(**kwargs):
     X = df.drop(columns=drop_cols, errors="ignore").copy()
     logger.info("Feature columns: %s", list(X.columns))
 
-    encoders    = {}
-    cat_columns = X.select_dtypes(include=["object", "category"]).columns
+    # ✅ FIX 1: replace 'n/a' strings with NaN, then impute
+    X.replace("n/a", pd.NA, inplace=True)
+
+    cat_columns = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    num_columns = X.select_dtypes(include=["number"]).columns.tolist()
+
+    # Impute numeric columns with median
+    if num_columns:
+        num_imputer = SimpleImputer(strategy="median")
+        X[num_columns] = num_imputer.fit_transform(X[num_columns])
+
+    # Impute categorical columns with most frequent
+    if cat_columns:
+        cat_imputer = SimpleImputer(strategy="most_frequent")
+        X[cat_columns] = cat_imputer.fit_transform(X[cat_columns])
+
+    logger.info("NaN counts after imputation:\n%s", X.isnull().sum()[X.isnull().sum() > 0])
+
+    # Encode categorical columns
+    encoders = {}
     for col in cat_columns:
         le        = LabelEncoder()
         X[col]    = le.fit_transform(X[col].astype(str))
@@ -251,8 +270,18 @@ def run_daily_inference(**kwargs):
         drop_cols = ["customer_key", "customer_id", "run_date"]
         X = chunk.drop(columns=drop_cols, errors="ignore").copy()
 
+        # ✅ FIX 1 (inference): replace 'n/a' and impute NaN before encoding
+        X.replace("n/a", pd.NA, inplace=True)
+
+        num_columns = X.select_dtypes(include=["number"]).columns.tolist()
+        if num_columns:
+            num_imputer = SimpleImputer(strategy="median")
+            X[num_columns] = num_imputer.fit_transform(X[num_columns])
+
         for col, le in encoders.items():
             if col in X.columns:
+                # Fill NaN with most frequent class before mapping
+                X[col] = X[col].fillna(le.classes_[0])
                 class_mapping = {cat: idx for idx, cat in enumerate(le.classes_)}
                 X[col] = (
                     X[col]
@@ -268,7 +297,8 @@ def run_daily_inference(**kwargs):
         probs       = model.predict_proba(X)[:, 1]
 
         out = pd.DataFrame({
-            "prediction_date":   pd.to_datetime(ds).date(),
+            # ✅ FIX 2: renamed prediction_date -> model_run_date to match DB schema
+            "model_run_date":    pd.to_datetime(ds).date(),
             "churn_prediction":  predictions,
             "churn_probability": probs,
         })
@@ -304,9 +334,10 @@ with DAG(
     ensure_idempotency = SQLExecuteQueryOperator(
         task_id="delete_existing_predictions_for_day",
         conn_id=POSTGRES_CONN_ID,
+        # ✅ FIX 2: use model_run_date (matches what inference writes)
         sql=f"""
             DELETE FROM {GOLD_SCHEMA}.{PREDICTIONS_TABLE}
-            WHERE prediction_date = '{{{{ ds }}}}';
+            WHERE DATE(model_run_date) = '{{{{ ds }}}}';
         """,
     )
 

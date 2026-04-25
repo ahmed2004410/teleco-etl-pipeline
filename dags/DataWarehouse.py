@@ -646,10 +646,12 @@ def load_csv_to_staging(**kwargs):
             if good_rows.empty:
                 raise AirflowException(f"File '{file_name}' has 0 valid rows after quality checks.")
 
-            # ── c. Duplicate check against Bronze history ──────────
+            # ── c. Duplicate Handling (Idempotency Pattern) ──────────
+            # 1. تحميل كل البيانات السليمة إلى الـ Staging
             good_rows.to_sql('staging_churn', con=engine,
                              if_exists='append', index=False, schema='public')
 
+            # 2. فحص عدد السجلات المكررة مع طبقة الـ Bronze
             dup_count = hook.get_first("""
                 SELECT COUNT(*)
                 FROM   staging_churn s
@@ -657,34 +659,39 @@ def load_csv_to_staging(**kwargs):
             """)[0]
 
             if dup_count > 0:
-                hook.run("TRUNCATE TABLE staging_churn")
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                shutil.move(file_path,
-                            os.path.join(QUARANTINE_PATH, f"DUP_CONTENT_{ts}_{file_name}"))
+                print(f"🔄 Found {dup_count} duplicate(s) already in Bronze. Isolating them...")
+                
+                # [تعديل جوهري]: بدلاً من إيقاف الـ Pipeline، نقوم بحذف المكرر من الـ Staging فقط
+                # هذا يضمن مرور البيانات الجديدة فقط لطبقة الـ Bronze
+                hook.run("""
+                    DELETE FROM staging_churn
+                    WHERE customer_id IN (
+                        SELECT s.customer_id 
+                        FROM staging_churn s
+                        JOIN bronze.churn_raw b ON s.customer_id = b.customer_id
+                    )
+                """)
+                print(f"🗑️ Removed {dup_count} duplicate records from Staging. Pipeline will continue.")
 
-                err_msg = f"Blocked: {dup_count} customer(s) already exist in Bronze."
-                _register_file(hook, file_path, status='FAILED',
-                               error_msg=err_msg, dag_run_id=dag_run_id)
+            # 3. التحقق مما إذا كان هناك بيانات متبقية بعد فلترة المكرر
+            final_count = hook.get_first("SELECT COUNT(*) FROM staging_churn")[0]
+            
+            if final_count == 0:
+                print(f"⚠️ All records in '{file_name}' were duplicates. Skipping smoothly.")
+                # نعتبر الملف SUCCESS لأننا تعاملنا معه بشكل صحيح دون أخطاء
+                _register_file(hook, file_path, status='SUCCESS',
+                               row_count=0, dag_run_id=dag_run_id)
+                processed_files.append(file_path)
+                continue # تخطي باقي اللوب والانتقال للملف التالي
 
-                send_email(
-                    to=['b4677396@gmail.com'],
-                    subject=f"🚨 DUPLICATE DATA BLOCKED: {file_name}",
-                    html_content=f"""
-                    <h3>Pipeline Stopped by Validator</h3>
-                    <p>File <b>{file_name}</b> contains <b>{dup_count}</b> records already in Bronze.</p>
-                    <p><b>Action:</b> Staging truncated, file moved to Quarantine.</p>
-                    """
-                )
-                raise AirflowException(err_msg)
-
-            print(f"✅  Validation passed. {len(good_rows)} clean row(s) staged.")
+            print(f"✅  Validation passed. {final_count} new clean row(s) staged.")
 
             # ── d. Mark SUCCESS ────────────────────────────────────
             _register_file(hook, file_path, status='SUCCESS',
-                           row_count=len(good_rows), dag_run_id=dag_run_id)
+                           row_count=final_count, dag_run_id=dag_run_id)
 
             processed_files.append(file_path)
-
+            
         except AirflowException:
             raise   # let Airflow handle it, already registered as FAILED above
 
@@ -725,7 +732,14 @@ def archive_processed_files(**context):
             archive_full_path = os.path.join(ARCHIVE_PATH, archive_name)
             
             # 4. انقل الملف
-            shutil.move(file_path, archive_full_path)
+            shutil.copy2(file_path, archive_full_path)
+            
+            try:
+                os.remove(file_path)
+            except PermissionError:
+                import subprocess
+                subprocess.run(['rm', '-f', file_path], check=True)
+            
             print(f"✅ Archived: {archive_full_path}")
             
             # 5. خطوة مهمة جداً: تحديث حالة الملف عشان ميتسحبش تاني بالغلط

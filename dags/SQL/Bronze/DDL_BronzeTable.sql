@@ -84,5 +84,9 @@ CREATE TABLE IF NOT EXISTS public.staging_churn (
     churn_value             INTEGER,
     churn_score             INTEGER,
     cltv                    INTEGER,
-    churn_reason            VARCHAR(255)
+    churn_reason            VARCHAR(255),
+    churn_reason            VARCHAR(255),
+    created_at              TIMESTAMP,
+    updated_at              TIMESTAMP,
+    record_type             VARCHAR(50)
 );
