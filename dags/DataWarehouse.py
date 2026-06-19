@@ -595,7 +595,7 @@ def load_csv_to_staging(**kwargs):
         print("✅  All files already processed. Nothing to do — pipeline is up-to-date.")
         return []
 
-    print(f"📦  {len(new_files)} new file(s) to process out of {len(all_files)} total.")
+    print(f"  {len(new_files)} new file(s) to process out of {len(all_files)} total.")
 
     # Truncate staging once before the batch so we start clean
     hook.run("TRUNCATE TABLE staging_churn")
